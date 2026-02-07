@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "search": "node dist/index.js search",
     "report": "node dist/index.js report",
+    "server": "node dist/index.js server",
     "schedule": "node dist/index.js schedule",
     "dev": "ts-node src/index.ts"
   },

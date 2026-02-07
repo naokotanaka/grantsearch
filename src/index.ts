@@ -1,6 +1,7 @@
 import { searchAllSources } from './scrapers';
 import { generateAllReports } from './reports/report-generator';
 import { startScheduler } from './scheduler';
+import { startServer } from './server';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'search';
@@ -25,6 +26,11 @@ async function main(): Promise<void> {
       // 既存のDBデータからレポートのみ生成
       console.log('📊 既存データからレポートを生成します...\n');
       generateAllReports();
+      break;
+
+    case 'server':
+      // Webサーバーモード（スマホからアクセス可能）
+      startServer();
       break;
 
     case 'schedule':
@@ -52,12 +58,14 @@ function printHelp(): void {
 使い方:
   npm run search              全ソースから助成金情報を収集してレポート生成
   npm run report              既存データからレポートのみ再生成
+  npm run server              Webサーバー起動（スマホからアクセス可能）
   npm run schedule            定期実行モード（毎週月曜9:00）
   npm start -- schedule "0 9 * * 1"   カスタムcron式で定期実行
 
 コマンド:
   search    - Web上の助成金情報を収集し、レポートを生成します
   report    - 前回収集済みのデータからレポートを再生成します
+  server    - Webサーバーを起動します（スマホからブラウザでアクセス）
   schedule  - 定期実行モードで起動します（デフォルト: 毎週月曜9:00）
   help      - このヘルプを表示します
 
