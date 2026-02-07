@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   search:
@@ -48,3 +50,22 @@ jobs:
           git add -f output/
           git diff --staged --quiet || git commit -m "助成金レポートを更新 $(date +'%Y-%m-%d')"
           git push
+
+      - name: GitHub Pages用のindex.htmlを生成
+        run: node dist/generate-pages.js
+
+      - name: GitHub Pagesにデプロイ
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages/
+
+  deploy-pages:
+    needs: search
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: GitHub Pagesへデプロイ
+        id: deployment
+        uses: actions/deploy-pages@v4
