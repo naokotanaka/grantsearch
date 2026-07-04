@@ -200,23 +200,6 @@ export function getKnownGrants(): Grant[] {
       source: 'known',
       lastUpdated: now,
     },
-    {
-      id: 'known_aichi_shakyou',
-      name: '愛知県社協ボランティアセンター 助成金情報（各種取りまとめ）',
-      organization: '愛知県社会福祉協議会',
-      region: '愛知県',
-      targetProjects: '子育て支援、子ども食堂、ボランティア活動等に関する各種助成金を一元的に紹介',
-      grantAmount: '助成制度により異なる',
-      grantPeriod: '助成制度により異なる',
-      applicationDeadline: '随時更新',
-      personnelCosts: '不明',
-      honorarium: '不明',
-      rent: '不明',
-      status: '募集中',
-      url: 'http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html',
-      source: 'known',
-      lastUpdated: now,
-    },
 
     // ===== 長久手市 =====
     {
