@@ -1,0 +1,36 @@
+name: デバッグ用ページ取得（一時的）
+
+# 開発用の一時ワークフロー：スクレイパー対象ページの実物HTMLを取得して
+# このブランチにコミットする。解析ロジックの修正が終わったら削除する。
+on:
+  push:
+    branches: [claude/fetch-aichivc-debug]
+    paths-ignore:
+      - 'debug/**'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: 対象ページを取得
+        run: |
+          mkdir -p debug
+          curl -sSL --max-time 60 \
+            -H "User-Agent: GrantSearch/1.0 (NPO Grant Research Tool)" \
+            "http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html" \
+            -o debug/aichivc.html
+          ls -la debug/
+
+      - name: 取得結果をブランチにコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add debug/
+          git diff --staged --quiet || git commit -m "debug: aichivc 実ページのHTMLを取得"
+          git push
