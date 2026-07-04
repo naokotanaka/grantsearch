@@ -236,22 +236,5 @@ export function getKnownGrants(): Grant[] {
       source: 'known',
       lastUpdated: now,
     },
-    {
-      id: 'known_nagakute_subsidies',
-      name: '長久手市 補助金等一覧（総合）',
-      organization: '長久手市',
-      region: '長久手市',
-      targetProjects: '長久手市が提供する各種補助金の一覧。子育て支援、まちづくり関連等を含む',
-      grantAmount: '補助金により異なる',
-      grantPeriod: '補助金により異なる',
-      applicationDeadline: '補助金により異なる',
-      personnelCosts: '不明',
-      honorarium: '不明',
-      rent: '不明',
-      status: '不明',
-      url: 'https://www.city.nagakute.lg.jp/soshiki/somubu/zaiseika/1/1/1429.html',
-      source: 'known',
-      lastUpdated: now,
-    },
   ];
 }
