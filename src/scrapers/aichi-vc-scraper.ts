@@ -1,14 +1,20 @@
+import * as cheerio from 'cheerio';
 import { BaseScraper } from './base-scraper';
-import { Grant } from '../models/grant';
+import { Grant, GrantStatus, Region } from '../models/grant';
 
 /**
  * 愛知県社会福祉協議会ボランティアセンター「助成金等の情報」ページのスクレイパー
  * http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html
  *
- * このページは表ではなく、各助成金が「◆助成金名（助成元）」という見出しで始まり、
- * 続けて説明・「■期間：…」・「■詳細：URL」が本文として並ぶ構成になっている。
- * そのため本文テキストを「◆」で区切って1件ずつ解析する。
- * （詳細URLは本文中にそのまま文字として表示されるため、テキストから抽出できる。）
+ * ページ構造（実HTMLを確認済み）:
+ * - 各助成金は「<p>◆<strong>助成金名</strong>（助成元）New</p>」の見出し段落で始まり、
+ *   説明段落と「■期間：…」「■詳細：<a href>URL</a>」の段落が続く。
+ * - ◆と助成金名が別々の<strong>に分かれる場合や、見出しに「（終了）」が付く場合がある。
+ * - 2023年度以降の古い助成金も削除されず残るアーカイブ型のページ。
+ *
+ * そのため、締切日が未来のもの（または New マーク付き）だけを採用し、
+ * 終了済み・過年度分は載せない。地域は名称・助成元に「愛知」「名古屋」を
+ * 含むものだけ愛知県、それ以外は全国扱いとする。
  */
 export class AichiVcScraper extends BaseScraper {
   private pageUrl = 'http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html';
@@ -18,77 +24,112 @@ export class AichiVcScraper extends BaseScraper {
   }
 
   async search(): Promise<Grant[]> {
-    const grants: Grant[] = [];
-
     try {
       const $ = await this.fetchPage(this.pageUrl);
-
-      // 本文コンテナ（見つからなければ body 全体）のテキストを取得
-      const root = $('#main, .main, #contents, .contents, .content, article').first();
-      const container = root.length ? root : $('body');
-      const fullText = this.cleanText(container.text());
-
-      // 「◆（◇・♦）」ごとに助成金ブロックへ分割（先頭の導入文は捨てる）
-      const blocks = fullText.split(/[◆◇♦]/).slice(1);
-
-      for (const block of blocks) {
-        try {
-          const grant = this.parseBlock(block);
-          if (grant) grants.push(grant);
-        } catch {
-          // 個別ブロックの解析エラーはスキップ
-        }
-      }
+      const grants = this.parseDocument($);
 
       if (grants.length === 0) {
-        console.error('[愛知VC] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
+        console.error('[愛知VC] 募集中の助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
       }
+      return grants;
     } catch (error) {
       console.error('[愛知VC] ページ取得に失敗:', error instanceof Error ? error.message : error);
+      return [];
     }
-
-    // 同名の重複を除去
-    const unique = new Map<string, Grant>();
-    for (const grant of grants) unique.set(grant.id, grant);
-    return Array.from(unique.values());
   }
 
-  /** 「◆」以降の1ブロックから助成金1件を組み立てる。助成金でなければ null。 */
-  private parseBlock(block: string): Grant | null {
-    const text = this.cleanText(block);
-    if (!text) return null;
+  /** ページ全体を解析し、募集中の助成金だけを返す */
+  private parseDocument($: cheerio.CheerioAPI): Grant[] {
+    interface Block {
+      name: string;
+      organization: string;
+      isNew: boolean;
+      closed: boolean;
+      body: string;
+      url: string;
+    }
 
-    // 助成金の見出しらしさの確認（装飾用の◆などを除外）
-    if (!/期間|詳細|助成|補助/.test(text)) return null;
+    // 全<p>を順に走査し、「◆＋太字」の見出しごとにブロック化する
+    const blocks: Block[] = [];
+    let current: Block | null = null;
 
-    // 助成金名：先頭から「（」「New」「■」のいずれかまで
-    const name = this.cleanText(text.split(/[（(]|New|■/)[0]);
-    if (!name || name.length < 4) return null;
+    $('p').each((_, elem) => {
+      const $p = $(elem);
+      const text = this.cleanText($p.text());
+      const strongs = $p.find('strong');
 
-    // 助成元：最初の（…）の中身
-    const orgMatch = text.match(/[（(]([^）)]+)[）)]/);
-    const organization = orgMatch ? this.cleanText(orgMatch[1]) : '要確認';
+      if (text.startsWith('◆') && strongs.length > 0) {
+        if (current) blocks.push(current);
 
-    // 期間（締切）：「期間：」以降、次の「■」まで
-    const periodMatch = text.match(/期間[：:]\s*([^■]+)/);
-    const deadline = periodMatch ? this.cleanText(periodMatch[1]) : '要確認';
+        // 太字タグを全て連結してから装飾の◆を除去（◆が別タグの場合に対応）
+        let name = this.cleanText(
+          strongs.toArray().map(s => this.cleanText($(s).text())).join('')
+        );
+        name = this.cleanText(name.replace(/[◆◇♦]/g, ''));
 
-    // 補助額：「補助額】…」以降、最初の閉じ括弧まで（複数コースは先頭のみ）
-    const amountMatch = text.match(/補助額[】\]]?\s*([^）)■【]+[）)]?)/);
-    const grantAmount = amountMatch ? this.cleanText(amountMatch[1]) : '要確認';
+        const rest = text.replace(/[◆◇♦]/g, '').slice(name.length);
+        const orgMatch = rest.match(/[（(]([^）)]+)[）)]/);
 
-    // 詳細URL：ブロック内に文字として現れる最初の http(s) リンク
-    const urlMatch = text.match(/https?:\/\/[^\s　）)、]+/);
-    const url = urlMatch ? urlMatch[0] : this.pageUrl;
-
-    return this.createGrant({
-      name,
-      organization,
-      region: '愛知県',
-      applicationDeadline: deadline,
-      grantAmount,
-      url,
-      status: this.detectStatus(text, deadline),
+        current = {
+          name,
+          organization: orgMatch ? this.cleanText(orgMatch[1]) : '要確認',
+          isNew: /New/i.test(rest),
+          closed: /（終了）|\(終了\)/.test(text),
+          body: '',
+          url: '',
+        };
+      } else if (current) {
+        current.body += ' ' + text;
+        if (!current.url) {
+          const a = $p.find('a[href^="http"]').first();
+          if (a.length) current.url = a.attr('href') ?? '';
+        }
+      }
     });
+    if (current) blocks.push(current);
+
+    const now = new Date();
+    const grants: Grant[] = [];
+
+    for (const block of blocks) {
+      try {
+        if (block.closed || block.name.length < 6) continue;
+
+        const deadlineMatch = block.body.match(/期間[：:]\s*([^■]+)/);
+        const deadline = deadlineMatch ? this.cleanText(deadlineMatch[1]) : '';
+        const deadlineDate = this.lastDateIn(deadline);
+        const isOpen = deadlineDate !== null && deadlineDate >= now;
+
+        // 締切が未来のもの、または New マーク付きのものだけ採用（過年度アーカイブを除外）
+        if (!isOpen && !block.isNew) continue;
+
+        const amountMatch = block.body.match(/補助額[】\]]?\s*([^）)■【]+[）)]?)/);
+
+        // 名称・助成元に愛知/名古屋を含むものだけ愛知県、他は全国募集とみなす
+        const region: Region = /愛知|名古屋/.test(block.name + block.organization) ? '愛知県' : '全国';
+        const status: GrantStatus = isOpen ? '募集中' : this.detectStatus(block.body, deadline);
+
+        grants.push(this.createGrant({
+          name: block.name,
+          organization: block.organization,
+          region,
+          applicationDeadline: deadline || '要確認',
+          grantAmount: amountMatch ? this.cleanText(amountMatch[1]) : '要確認',
+          url: block.url || this.pageUrl,
+          status,
+        }));
+      } catch {
+        // 個別ブロックの解析エラーはスキップ
+      }
+    }
+
+    return grants;
+  }
+
+  /** 期間文字列の最後に現れる日付（＝締切側）を返す */
+  private lastDateIn(text: string): Date | null {
+    const matches = [...text.matchAll(/(?:令和\d+年|\d{4}年)\d{1,2}月\d{1,2}日/g)];
+    if (matches.length === 0) return null;
+    return this.parseJapaneseDate(matches[matches.length - 1][0]);
   }
 }
