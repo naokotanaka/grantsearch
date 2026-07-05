@@ -12,20 +12,27 @@
     "schedule": "node dist/index.js schedule",
     "dev": "ts-node src/index.ts"
   },
-  "keywords": ["助成金", "補助金", "子育て支援", "子ども食堂", "NPO"],
+  "keywords": [
+    "助成金",
+    "補助金",
+    "子育て支援",
+    "子ども食堂",
+    "NPO"
+  ],
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "axios": "^1.7.0",
-    "cheerio": "^1.0.0",
     "better-sqlite3": "^11.0.0",
-    "node-cron": "^3.0.3",
-    "dayjs": "^1.11.0"
+    "cheerio": "^1.0.0",
+    "dayjs": "^1.11.0",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "@types/node": "^20.14.0",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.14.0",
     "@types/node-cron": "^3.0.0",
-    "ts-node": "^10.9.0"
+    "ts-node": "^10.9.0",
+    "typescript": "^5.5.0"
   }
 }

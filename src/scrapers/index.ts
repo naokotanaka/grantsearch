@@ -8,8 +8,9 @@ import { ShimisenScraper } from './shimisen-scraper';
 import { NewsDiscoveryScraper } from './news-discovery-scraper';
 import { getKnownGrants } from './known-grants';
 import { checkKnownGrants } from './known-grants-checker';
-import { Grant } from '../models/grant';
+import { Grant, EXCLUDE_KEYWORDS } from '../models/grant';
 import { getDatabase, upsertGrants, logSearch } from '../models/database';
+import { enrichGrants } from '../enrich/ai-enricher';
 
 /** 全スクレイパーの一覧 */
 function getAllScrapers(): BaseScraper[] {
@@ -73,7 +74,19 @@ export async function searchAllSources(): Promise<Grant[]> {
   }
 
   // 複数の情報源が同じ助成金を載せていることがあるため、名前ベースでも重複を畳む
-  const result = dedupeAcrossSources(Array.from(uniqueGrants.values()));
+  const deduped = dedupeAcrossSources(Array.from(uniqueGrants.values()));
+
+  // 活動分野外（被災地・災害支援など）は掲載しない
+  const inScope = deduped.filter(g => {
+    const text = g.name + g.targetProjects;
+    const hit = EXCLUDE_KEYWORDS.find(kw => text.includes(kw));
+    if (hit) console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
+    return !hit;
+  });
+
+  // 各助成金の公式ページを読み、詳細情報（対象団体・助成額・経費可否）を充填。
+  // 応募対象外と判断されたものはここで除外される。
+  const result = await enrichGrants(inScope);
   const statusCounts = {
     募集中: result.filter(g => g.status === '募集中').length,
     募集前: result.filter(g => g.status === '募集前').length,
