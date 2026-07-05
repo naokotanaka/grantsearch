@@ -58,6 +58,14 @@ jobs:
           fetch "https://fields.canpan.info/grant/?page=3&sort=update&dir=desc" canpan-p3.html
           fetch "https://fields.canpan.info/grant/?page=4&sort=update&dir=desc" canpan-p4.html
           fetch "https://fields.canpan.info/grant/?page=5&sort=update&dir=desc" canpan-p5.html
+          # まとめ記事の詳細ページ（公式リンク抽出の設計用）
+          fetch "https://shimisen-kyoto.org/subsidy/52696" detail-shimisen.html
+          fetch "https://fields.canpan.info/grant/detail/2474" detail-canpan.html
+          fetch "https://musubie.org/news/fami/start/32444" detail-musubie.html
+          # Google News のリダイレクト解決確認（最終URLを記録）
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -o /dev/null -w "%{url_effective}\n" \
+            "https://news.google.com/rss/articles/CBMiTEFVX3lxTE1idURPLWd1WDVhZW5zSUNRR0N1WExTRG9ScVhmR1RMWXl3QTNLZ3Y3bkJ6T1JkbHlyenFsVUJxTGNqQzZTUGR2Z1NrMnE?oc=5" \
+            > debug/news-redirect-result.txt 2>&1 || echo "FAILED" > debug/news-redirect-result.txt
           # Google News RSS（発見用・フォーマット確認）
           curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
             --data-urlencode "q=子ども食堂 助成金" \
