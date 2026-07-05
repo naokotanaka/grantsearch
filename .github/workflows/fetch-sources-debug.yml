@@ -44,9 +44,11 @@ jobs:
             --data-urlencode "keyword=子ども食堂" --data-urlencode "status=1" \
             "https://fields.canpan.info/grant/" -o debug/canpan-shokudo.html || echo "FAILED: canpan-shokudo" >> debug/errors.txt
           sleep 2
-          # WAM 助成の募集情報（移転先を特定済み）
+          # WAM 助成の募集情報（インデックス＋最新年度の詳細）
           fetch "https://www.wam.go.jp/hp/wamjosei_boshu/" wam-boshu.html
-          fetch "https://www.wam.go.jp/hp/cat/wamjosei/" wam-wamjosei.html
+          fetch "https://www.wam.go.jp/hp/r8_wamjyosei/" wam-r8.html
+          fetch "https://www.wam.go.jp/hp/r8_wamjyosei_model/" wam-r8-model.html
+          fetch "https://www.wam.go.jp/hp/r7hosei_wamjyosei/" wam-r7hosei.html
           # しみせん（京都市市民活動総合センター）ページ送りは /page/N 形式
           fetch "https://shimisen-kyoto.org/subsidies" shimisen-1.html
           fetch "https://shimisen-kyoto.org/subsidies/page/2" shimisen-2.html

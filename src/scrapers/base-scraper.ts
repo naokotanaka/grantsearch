@@ -43,6 +43,7 @@ export abstract class BaseScraper {
       grantAmount: partial.grantAmount ?? '要確認',
       grantPeriod: partial.grantPeriod ?? '要確認',
       applicationDeadline: partial.applicationDeadline ?? '要確認',
+      expectedPeriod: partial.expectedPeriod ?? '',
       personnelCosts: partial.personnelCosts ?? '不明',
       honorarium: partial.honorarium ?? '不明',
       rent: partial.rent ?? '不明',
