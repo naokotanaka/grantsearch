@@ -1,0 +1,3 @@
+FAILED: https://shimisen-kyoto.org/subsidies
+FAILED: https://shimisen-kyoto.org/subsidies/page/2
+FAILED: https://shimisen-kyoto.org/subsidies/page/3
