@@ -31,6 +31,7 @@ function initializeSchema(db: Database.Database): void {
       grant_amount TEXT NOT NULL DEFAULT '',
       grant_period TEXT NOT NULL DEFAULT '',
       application_deadline TEXT NOT NULL DEFAULT '',
+      expected_period TEXT NOT NULL DEFAULT '',
       personnel_costs TEXT NOT NULL DEFAULT '不明',
       honorarium TEXT NOT NULL DEFAULT '不明',
       rent TEXT NOT NULL DEFAULT '不明',
@@ -48,14 +49,21 @@ function initializeSchema(db: Database.Database): void {
       error TEXT
     );
   `);
+
+  // 既存DB向けの列追加マイグレーション（列が既にあれば無視）
+  try {
+    db.exec("ALTER TABLE grants ADD COLUMN expected_period TEXT NOT NULL DEFAULT ''");
+  } catch {
+    // 列が存在する場合はエラーになるが問題ない
+  }
 }
 
 export function upsertGrant(db: Database.Database, grant: Grant): void {
   const stmt = db.prepare(`
     INSERT INTO grants (id, name, organization, region, target_projects, grant_amount,
-      grant_period, application_deadline, personnel_costs, honorarium, rent, status, url, source, last_updated)
+      grant_period, application_deadline, expected_period, personnel_costs, honorarium, rent, status, url, source, last_updated)
     VALUES (@id, @name, @organization, @region, @targetProjects, @grantAmount,
-      @grantPeriod, @applicationDeadline, @personnelCosts, @honorarium, @rent, @status, @url, @source, @lastUpdated)
+      @grantPeriod, @applicationDeadline, @expectedPeriod, @personnelCosts, @honorarium, @rent, @status, @url, @source, @lastUpdated)
     ON CONFLICT(id) DO UPDATE SET
       name = @name,
       organization = @organization,
@@ -64,6 +72,7 @@ export function upsertGrant(db: Database.Database, grant: Grant): void {
       grant_amount = @grantAmount,
       grant_period = @grantPeriod,
       application_deadline = @applicationDeadline,
+      expected_period = @expectedPeriod,
       personnel_costs = @personnelCosts,
       honorarium = @honorarium,
       rent = @rent,
@@ -119,6 +128,7 @@ function rowToGrant(row: any): Grant {
     grantAmount: row.grant_amount,
     grantPeriod: row.grant_period,
     applicationDeadline: row.application_deadline,
+    expectedPeriod: row.expected_period ?? '',
     personnelCosts: row.personnel_costs,
     honorarium: row.honorarium,
     rent: row.rent,
