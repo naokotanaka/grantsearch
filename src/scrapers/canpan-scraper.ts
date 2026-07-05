@@ -85,6 +85,7 @@ export class CanpanScraper extends BaseScraper {
 
         if (!name || name.length < 4) return;
         if (statusText === '募集終了') return;
+        if (/助成制度では(ございません|ありません)/.test(name)) return; // 注記付きの非助成情報
         if (!this.isRelevant(`${name} ${targetProjects}`)) return;
 
         if (statusText === '募集予定') {
