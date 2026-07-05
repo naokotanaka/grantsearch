@@ -54,6 +54,14 @@ export class CanpanScraper extends BaseScraper {
     if (result.length === 0) {
       console.error('[CANPAN] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
     }
+
+    // CANPANの詳細ページではなく公式サイトへのリンクに差し替える
+    for (const grant of result) {
+      const official =
+        (await this.resolveOfficialUrl(grant.url, /canpan\.info/)) ??
+        (await this.searchOfficialSite(`${grant.name} ${grant.organization}`, CanpanScraper.AGGREGATOR_SITES));
+      if (official) grant.url = official;
+    }
     return result;
   }
 
