@@ -58,6 +58,16 @@ export class NewsDiscoveryScraper extends BaseScraper {
     if (result.length === 0) {
       console.error('[News発見] 記事を取得できませんでした（RSSの形式が変わった可能性があります）');
     }
+
+    // Google News の転送URLは機械では解決できないため、
+    // 記事タイトルで検索して公式サイト（または元記事）のURLに差し替える
+    for (const grant of result) {
+      const official = await this.searchOfficialSite(
+        grant.name.replace(/…$/, ''),
+        NewsDiscoveryScraper.AGGREGATOR_SITES
+      );
+      if (official) grant.url = official;
+    }
     return result;
   }
 

@@ -56,6 +56,15 @@ export class ShimisenScraper extends BaseScraper {
     if (result.length === 0) {
       console.error('[しみせん] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
     }
+
+    // まとめ記事ではなく公式サイトへのリンクに差し替える
+    // （詳細記事内の外部リンク → 見つからなければ助成金名で検索）
+    for (const grant of result) {
+      const official =
+        (await this.resolveOfficialUrl(grant.url, /shimisen-kyoto|kyoto-npo|hitomachi/)) ??
+        (await this.searchOfficialSite(`${grant.name} ${grant.organization}`, ShimisenScraper.AGGREGATOR_SITES));
+      if (official) grant.url = official;
+    }
     return result;
   }
 

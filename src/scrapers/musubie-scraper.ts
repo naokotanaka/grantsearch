@@ -47,6 +47,14 @@ export class MusubieScraper extends BaseScraper {
     if (result.length === 0) {
       console.error('[むすびえ] 記事を抽出できませんでした（ページ構成が変わった可能性があります）');
     }
+
+    // 記事本文から公式サイトへのリンクを探して差し替える（本文コンテナ内のみ走査）
+    for (const grant of result) {
+      const official =
+        (await this.resolveOfficialUrl(grant.url, /musubie\.org|kodomoshokudou-network|kodomohinkon/, '.con-inner')) ??
+        (await this.searchOfficialSite(grant.name.replace(/…$/, ''), MusubieScraper.AGGREGATOR_SITES));
+      if (official) grant.url = official;
+    }
     return result;
   }
 

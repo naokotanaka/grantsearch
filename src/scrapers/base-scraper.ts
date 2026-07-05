@@ -121,4 +121,94 @@ export abstract class BaseScraper {
   protected cleanText(text: string): string {
     return text.replace(/[\s\n\r\t]+/g, ' ').trim();
   }
+
+  /** SNS・検索エンジンなど、公式サイトとして扱わないドメイン */
+  private static readonly NON_OFFICIAL =
+    /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google/;
+
+  /** まとめサイト等、検索フォールバックで公式サイトとして採用しないドメイン */
+  protected static readonly AGGREGATOR_SITES =
+    /shimisen-kyoto|canpan\.info|musubie\.org|wikipedia|note\.com|ameblo\.jp|hatenablog/;
+
+  /**
+   * まとめ記事・詳細ページを開き、その中から助成元の公式サイトへのリンクを探す。
+   * ドメインの出現回数＋リンク文言（公式/詳細等）＋ボタン風クラスでスコアリングし、
+   * 最有力のドメインの代表URLを返す。見つからなければ null。
+   */
+  protected async resolveOfficialUrl(
+    pageUrl: string,
+    exclude: RegExp,
+    containerSelector?: string
+  ): Promise<string | null> {
+    try {
+      const $ = await this.fetchPage(pageUrl);
+      const scope = containerSelector && $(containerSelector).length ? $(containerSelector) : $('body');
+
+      const byDomain = new Map<string, { url: string; score: number; bestLinkScore: number }>();
+      scope.find('a[href^="http"]').each((_, el) => {
+        const href = $(el).attr('href') ?? '';
+        if (exclude.test(href) || BaseScraper.NON_OFFICIAL.test(href)) return;
+
+        let domain: string;
+        try { domain = new URL(href).hostname; } catch { return; }
+
+        const text = this.cleanText($(el).text());
+        const cls = $(el).attr('class') ?? '';
+        let score = 1;
+        if (/公式|詳細|ホームページ|ウェブサイト|こちら|HP/.test(text)) score += 3;
+        if (/btn|external|official/.test(cls)) score += 2;
+        if (/\.pdf($|[?#])/i.test(href)) score -= 2;      // 申請書PDFよりページを優先
+        if (/contact|otoiawase|inquiry/i.test(href)) score -= 3; // 問い合わせページは避ける
+
+        const current = byDomain.get(domain);
+        if (current) {
+          current.score += score;
+          // ドメイン内で最もスコアの高い個別リンクを代表URLにする
+          if (score > current.bestLinkScore) {
+            current.url = href;
+            current.bestLinkScore = score;
+          }
+        } else {
+          byDomain.set(domain, { url: href, score, bestLinkScore: score });
+        }
+      });
+
+      let best: { url: string; score: number; bestLinkScore: number } | null = null;
+      for (const candidate of byDomain.values()) {
+        if (!best || candidate.score > best.score) best = candidate;
+      }
+      return best && best.score > 0 ? best.url : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 記事内に公式リンクが無い場合のフォールバック：
+   * DuckDuckGo（HTML版・キー不要）で助成金名を検索し、最初のまともな結果を返す。
+   */
+  protected async searchOfficialSite(query: string, exclude: RegExp): Promise<string | null> {
+    try {
+      const response = await this.client.get('https://html.duckduckgo.com/html/', {
+        params: { q: query },
+        responseType: 'text',
+      });
+      const $ = cheerio.load(response.data);
+
+      let found: string | null = null;
+      $('a.result__a').each((_, el) => {
+        if (found) return;
+        let href = $(el).attr('href') ?? '';
+        // DDGは /l/?uddg=<エンコード済みURL> 形式のリダイレクトを挟むことがある
+        const redirect = href.match(/uddg=([^&]+)/);
+        if (redirect) href = decodeURIComponent(redirect[1]);
+        if (!/^https?:\/\//.test(href)) return;
+        if (exclude.test(href) || BaseScraper.NON_OFFICIAL.test(href)) return;
+        found = href;
+      });
+      return found;
+    } catch {
+      return null;
+    }
+  }
 }
