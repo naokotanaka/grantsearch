@@ -104,6 +104,18 @@ export const SEARCH_KEYWORDS = [
   '子どもの貧困',
 ];
 
+/**
+ * 除外キーワード：対象がこれらに限定される助成金は掲載しない
+ * （当団体の活動分野外。被災地・災害支援は行わない方針）
+ */
+export const EXCLUDE_KEYWORDS = [
+  '被災',
+  '震災',
+  '災害',
+  '復興',
+  '被災地',
+];
+
 /** 検索対象の事業分野 */
 export const TARGET_FIELDS = [
   '子育て支援',

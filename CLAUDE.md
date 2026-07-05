@@ -71,6 +71,9 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
    - すべての結果を SQLite に upsert し、`search_log` に 1 行記録します。
    - `Grant.id` で重複除去後、`dedupeAcrossSources()` が**情報源をまたいだ同一助成金**
      （正規化名の包含・13文字以上の共通部分）を畳み、情報の充実した方を残します。
+   - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外し、
+     最後に **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページを
+     読んで詳細情報を充填します（下記「AIエンリッチメント」参照）。
 2. **`generateAllReports(grants?)`**（`src/reports/report-generator.ts`）は
    Markdown・HTML（`grants-report-YYYY-MM-DD.{md,html}`）・コンソール要約を
    **状態別の4部構成**で出力します：
@@ -108,6 +111,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   情報まとめ。京都限定は除外し全国応募可のものを採用。
 - `src/scrapers/index.ts` — `getAllScrapers()` でスクレイパーを登録し、全体を統括。
   `dedupeAcrossSources()`（情報源をまたぐ重複の畳み込み）もここにあります。
+- `src/enrich/ai-enricher.ts` — 公式ページ読み取りによる詳細情報の充填
+  （AIエンリッチメント）。下記の専用セクション参照。
 - `src/reports/report-generator.ts` — Markdown / HTML / コンソールのレポート描画。
 - `src/server.ts` — 依存ライブラリ不要の `http` ダッシュボード。`GET /`（操作パネル）、
   `POST /api/search`（検索実行）、`GET /api/report`（最新 HTML レポート配信）。
@@ -142,6 +147,28 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 インターフェース、`database.ts` の SQLite スキーマ＋`upsertGrant` パラメータ＋`rowToGrant`、
 `base-scraper.ts` の `createGrant` デフォルト値、両方のレポート描画処理。
 
+## AIエンリッチメント（公式ページ読み取り）
+
+`src/enrich/ai-enricher.ts` の `enrichGrants()` は、収集・重複除去後の各助成金の
+公式ページ本文を取得し、Claude（構造化出力）で以下を抽出して `Grant` に反映します：
+
+- **応募可否**（対象団体・対象地域・活動分野で判断）——「対象外」と判断されたものは
+  **レポートに掲載しない**（他県市限定、被災地・災害支援限定、分野が明らかに無関係）
+- 対象団体、助成額、期間、締切、人件費／謝金／家賃の可否、一言要約
+
+動作の要点：
+
+- **APIキー**：環境変数 `ANTHROPIC_API_KEY`（CI では GitHub Secrets 経由で
+  `search.yml` が注入）。**未設定でも壊れず**、ルールベースの簡易抽出
+  （正規表現）にフォールバックします。
+- **モデル**：既定 `claude-haiku-4-5`（低コスト）。環境変数 `CLAUDE_MODEL` で上書き可。
+- **安全弁**：1回の実行で読むページは最大150件（`MAX_PAGES`）、本文は8,000字まで。
+  ページ取得失敗・AI呼び出し失敗時はその助成金を**そのまま掲載**します（消さない）。
+- **上書きしない**：スクレイパーが既に良い値を持つ項目（`要確認`/`不明` 以外）は
+  AI の抽出結果で上書きしません。
+- 当団体のプロフィール（`NPO_PROFILE`）と判断ルールは同ファイルの
+  `SYSTEM_PROMPT` にあります。応募可否の方針を変える場合はここを編集してください。
+
 ## 規約
 
 - **言語：** ユーザーが目にするもの（コンソールログ、レポート文言、HTML、ダッシュボード、
@@ -156,7 +183,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   （`GrantSearch/1.0 ...`）と 30 秒のタイムアウトを送ります。ソースサイトへ過度な負荷を
   かけないよう配慮を維持してください。
 - **依存関係**（意図的に最小限）：`axios`、`cheerio`、`better-sqlite3`、`node-cron`、
-  `dayjs`。Web サーバは Node の `http` モジュールのみを使用（Express なし）。
+  `dayjs`、`@anthropic-ai/sdk`（AIエンリッチメント用）。Web サーバは Node の
+  `http` モジュールのみを使用（Express なし）。
 
 ## 新しいスクレイパーの追加手順
 
