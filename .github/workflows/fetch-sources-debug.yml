@@ -1,0 +1,66 @@
+name: デバッグ用ソース一括取得（一時的）
+
+# 開発用の一時ワークフロー：各スクレイパー対象ページの実データを取得して
+# このブランチにコミットする。解析ロジックの修正が終わったら不要（mainには入れない）。
+on:
+  push:
+    branches: [claude/fetch-sources-debug]
+    paths-ignore:
+      - 'debug/**'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: 各ソースの実データを取得
+        run: |
+          mkdir -p debug
+          UA="GrantSearch/1.0 (NPO Grant Research Tool)"
+          fetch() {
+            curl -sSL --max-time 60 -H "User-Agent: $UA" "$1" -o "debug/$2" \
+              || echo "FAILED: $1" >> debug/errors.txt
+            sleep 2
+          }
+          # むすびえ（一覧・2ページ目・RSSフィード）
+          fetch "https://musubie.org/news_cat/subsidy/" musubie-1.html
+          fetch "https://musubie.org/news_cat/subsidy/page/2/" musubie-2.html
+          fetch "https://musubie.org/news_cat/subsidy/feed/" musubie-feed.xml
+          # CANPAN 検索結果（キーワード3種）
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "keyword=子ども" --data-urlencode "status=1" \
+            "https://fields.canpan.info/grant/" -o debug/canpan-kodomo.html || echo "FAILED: canpan-kodomo" >> debug/errors.txt
+          sleep 2
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "keyword=子育て" --data-urlencode "status=1" \
+            "https://fields.canpan.info/grant/" -o debug/canpan-kosodate.html || echo "FAILED: canpan-kosodate" >> debug/errors.txt
+          sleep 2
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "keyword=子ども食堂" --data-urlencode "status=1" \
+            "https://fields.canpan.info/grant/" -o debug/canpan-shokudo.html || echo "FAILED: canpan-shokudo" >> debug/errors.txt
+          sleep 2
+          # WAM
+          fetch "https://www.wam.go.jp/hp/cat/cat_jyosei.html" wam-jyosei.html
+          fetch "https://www.wam.go.jp/hp/cat/cat_kodomo.html" wam-kodomo.html
+          # しみせん（京都市市民活動総合センター）
+          fetch "https://shimisen-kyoto.org/subsidies" shimisen-1.html
+          fetch "https://shimisen-kyoto.org/subsidies?page=2" shimisen-2.html
+          # Google News RSS（発見用・フォーマット確認）
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "q=子ども食堂 助成金" \
+            --data-urlencode "hl=ja" --data-urlencode "gl=JP" --data-urlencode "ceid=JP:ja" \
+            "https://news.google.com/rss/search" -o debug/news-rss.xml || echo "FAILED: news-rss" >> debug/errors.txt
+          ls -la debug/
+
+      - name: 取得結果をブランチにコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add debug/
+          git diff --staged --quiet || git commit -m "debug: 各ソースの実データを取得"
+          git push
