@@ -1,12 +1,30 @@
+import * as cheerio from 'cheerio';
 import { BaseScraper } from './base-scraper';
 import { Grant, SEARCH_KEYWORDS } from '../models/grant';
 
 /**
  * CANPAN 助成制度データベースからのスクレイパー
  * https://fields.canpan.info/grant/
+ *
+ * 日本最大級の助成金DB。マイナーな財団系助成金の発掘の本命。
+ *
+ * ページ構造（実HTMLを確認済み）:
+ * - keyword パラメータは効かないため、一覧を全ページ取得してこちらで関連分野に絞り込む
+ * - 一覧は /grant/?page=N&sort=update&dir=desc（20件/ページ）
+ * - 各行: 助成制度名 <a href="/grant/detail/ID">、実施団体 <a href="/organization/...">、
+ *   対象事業、右列に <p class="status">募集中/募集予定/募集終了</p> と <p class="term">期間</p>
  */
 export class CanpanScraper extends BaseScraper {
-  private baseUrl = 'https://fields.canpan.info/grant';
+  private baseUrl = 'https://fields.canpan.info';
+
+  /** 取得する最大ページ数（現在は92件≒5ページ。余裕を持たせる） */
+  private static readonly MAX_PAGES = 8;
+
+  /** 関連分野の判定キーワード（SEARCH_KEYWORDS に発掘用の語を追加） */
+  private static readonly EXTRA_KEYWORDS = [
+    '移民', '難民', 'ひとり親', '母子', '貧困', '孤立', '食支援', 'フードバンク',
+    '食育', '教育支援', '奨学', '子どもの居場所', 'こども',
+  ];
 
   constructor() {
     super('canpan', '全国');
@@ -14,67 +32,96 @@ export class CanpanScraper extends BaseScraper {
 
   async search(): Promise<Grant[]> {
     const grants: Grant[] = [];
-    const keywords = ['子ども', '子育て', '外国人', '多文化共生', '児童'];
 
-    for (const keyword of keywords) {
+    for (let page = 1; page <= CanpanScraper.MAX_PAGES; page++) {
       try {
-        const pageGrants = await this.searchByKeyword(keyword);
-        grants.push(...pageGrants);
+        const url = `${this.baseUrl}/grant/?page=${page}&sort=update&dir=desc`;
+        const $ = await this.fetchPage(url);
+        const pageGrants = this.parseListPage($);
+        if (pageGrants.parsedRows === 0) break; // 最終ページを超えた
+        grants.push(...pageGrants.grants);
       } catch (error) {
-        console.error(`[CANPAN] キーワード「${keyword}」の検索に失敗:`, error instanceof Error ? error.message : error);
+        console.error(`[CANPAN] ページ${page}の取得に失敗:`, error instanceof Error ? error.message : error);
+        break;
       }
     }
 
     // IDで重複を除去
-    const uniqueGrants = new Map<string, Grant>();
-    for (const grant of grants) {
-      uniqueGrants.set(grant.id, grant);
-    }
+    const unique = new Map<string, Grant>();
+    for (const grant of grants) unique.set(grant.id, grant);
+    const result = Array.from(unique.values());
 
-    return Array.from(uniqueGrants.values());
+    if (result.length === 0) {
+      console.error('[CANPAN] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
+    }
+    return result;
   }
 
-  private async searchByKeyword(keyword: string): Promise<Grant[]> {
+  /** 一覧1ページを解析。parsedRows は関連判定前の行数（ページ送り終端の判定用） */
+  private parseListPage($: cheerio.CheerioAPI): { grants: Grant[]; parsedRows: number } {
     const grants: Grant[] = [];
-    const searchUrl = `${this.baseUrl}/?keyword=${encodeURIComponent(keyword)}&status=1`;
+    let parsedRows = 0;
 
-    const $ = await this.fetchPage(searchUrl);
-
-    // CANPANの助成制度一覧ページの各助成情報を取得
-    $('table.list tbody tr, .grant-list .grant-item, .result-list li').each((_, elem) => {
+    $('tr').each((_, elem) => {
       try {
-        const $elem = $(elem);
-        const nameElem = $elem.find('a').first();
-        const name = this.cleanText(nameElem.text());
-        const href = nameElem.attr('href');
+        const $row = $(elem);
+        const nameLink = $row.find('a[href*="/grant/detail/"]').first();
+        if (!nameLink.length) return;
+        parsedRows++;
 
-        if (!name || !this.isRelevant(name)) return;
+        const name = this.cleanText(nameLink.text());
+        const href = nameLink.attr('href') ?? '';
+        const url = href.startsWith('http') ? href : `${this.baseUrl}${href}`;
 
-        const url = href ? (href.startsWith('http') ? href : `https://fields.canpan.info${href}`) : '';
-        const tds = $elem.find('td');
+        const organization = this.cleanText(
+          $row.find('a[href*="/organization/detail/"]').first().text()
+        ) || '要確認';
 
-        const organization = this.cleanText(tds.eq(1).text() || '');
-        const deadline = this.cleanText(tds.eq(2).text() || '');
+        // dl 内の最後の dd が対象事業
+        const targetProjects = this.cleanText($row.find('dl dd').last().text());
 
-        const grant = this.createGrant({
-          name,
-          organization: organization || '要確認',
-          region: '全国',
-          applicationDeadline: deadline || '要確認',
-          url,
-          status: this.detectStatus('', deadline),
-        });
+        const statusText = this.cleanText($row.find('p.status').first().text());
+        const term = this.cleanText($row.find('p.term').first().text());
 
-        grants.push(grant);
+        if (!name || name.length < 4) return;
+        if (statusText === '募集終了') return;
+        if (/助成制度では(ございません|ありません)/.test(name)) return; // 注記付きの非助成情報
+        if (!this.isRelevant(`${name} ${targetProjects}`)) return;
+
+        if (statusText === '募集予定') {
+          // 募集期間が発表済みの「これから募集」→ 募集前として予告掲載
+          grants.push(this.createGrant({
+            name,
+            organization,
+            region: '全国',
+            targetProjects,
+            applicationDeadline: term || '未発表',
+            expectedPeriod: term ? `募集予定（発表済み）: ${term}` : '募集予定（時期未発表）',
+            url,
+            status: '募集前',
+          }));
+        } else {
+          // 募集中（またはステータス不明だが掲載されているもの）
+          grants.push(this.createGrant({
+            name,
+            organization,
+            region: '全国',
+            targetProjects,
+            applicationDeadline: term || '要確認',
+            url,
+            status: statusText === '募集中' ? '募集中' : this.detectStatus(statusText, term),
+          }));
+        }
       } catch {
-        // 個別の要素の解析エラーはスキップ
+        // 個別行の解析エラーはスキップ
       }
     });
 
-    return grants;
+    return { grants, parsedRows };
   }
 
   private isRelevant(text: string): boolean {
-    return SEARCH_KEYWORDS.some(kw => text.includes(kw));
+    const keywords = [...SEARCH_KEYWORDS, ...CanpanScraper.EXTRA_KEYWORDS];
+    return keywords.some(kw => text.includes(kw));
   }
 }

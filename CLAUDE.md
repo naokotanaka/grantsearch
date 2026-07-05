@@ -55,21 +55,29 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 ```
 ソース ──► スクレイパー ──► Grant[] ──► SQLite (data/grants.db) ──► レポート (output/)
                               │                                        ├─ *.md
-  known-grants.ts (手動登録)   │                                        └─ *.html
-  CANPAN / むすびえ / WAM /    │                                    generate-pages.ts
-  愛知県VC / 長久手市 (Web)    ┘                                        └─ pages/index.html (GitHub Pages)
+  known-grants.ts (定番カタログ │                                        └─ *.html
+   ＋checkerで毎週募集検知)     │                                    generate-pages.ts
+  CANPAN / むすびえ / WAM /     │                                        └─ pages/index.html (GitHub Pages)
+  愛知県VC / 長久手市 /         │
+  しみせん / Google News RSS   ┘
 ```
 
 1. **`searchAllSources()`**（`src/scrapers/index.ts`）が全体を統括します。
-   - まず `getKnownGrants()` から手動登録の助成金を読み込みます。
+   - まず `checkKnownGrants()`（known-grants-checker）が定番リストの各公式ページを
+     フェッチし、今年度の募集告知を検知したエントリを「募集中＋実締切」へ自動昇格させます。
    - `getAllScrapers()` の各スクレイパーを順次実行し、スクレイパーごとに例外を
-     捕捉して 1 つの失敗が全体を止めないようにします。
+     捕捉して 1 つの失敗が全体を止めないようにします。**抽出0件は解析不全の
+     可能性が高いため警告ログ＋`search_log` に記録**します（沈黙故障の検知）。
    - すべての結果を SQLite に upsert し、`search_log` に 1 行記録します。
-   - `Grant.id` で重複を除去し、統合したリストを返します。
+   - `Grant.id` で重複除去後、`dedupeAcrossSources()` が**情報源をまたいだ同一助成金**
+     （正規化名の包含・13文字以上の共通部分）を畳み、情報の充実した方を残します。
 2. **`generateAllReports(grants?)`**（`src/reports/report-generator.ts`）は
-   Markdown レポート、HTML レポート（`grants-report-YYYY-MM-DD.{md,html}`）、
-   コンソール要約を出力します。`grants` を省略すると DB から全件を読み込むため、
-   `npm run report` は再スクレイピングなしで動作します。
+   Markdown・HTML（`grants-report-YYYY-MM-DD.{md,html}`）・コンソール要約を
+   **状態別の4部構成**で出力します：
+   - 🟢 **今募集中**（締切昇順）／🟡 **募集予定・例年この時期**（次に来る月順、
+     昨年実績を表示）／🔎 **新着・発見**（News発掘、新しい順）／⚪ **要確認**。
+   - `募集終了` は表示しません。`grants` を省略すると DB から全件を読み込むため、
+     `npm run report` は再スクレイピングなしで動作します。
 3. **`generate-pages.ts`** は単独スクリプトです（`index.ts` からは import されず、
    `node dist/generate-pages.js` として実行）。`output/` を新しい `pages/` ディレクトリへ
    コピーし、最新の HTML レポートを `pages/index.html` にして GitHub Pages 用に整えます。
@@ -90,9 +98,16 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   `parseJapaneseDate`：令和／西暦／スラッシュ形式に対応、`cleanText`）を提供します。
 - `src/scrapers/*-scraper.ts` — ソースごとの具象スクレイパー。`BaseScraper` を継承し
   `search(): Promise<Grant[]>` を実装します。
-- `src/scrapers/known-grants.ts` — スクレイピングでは確実に取得できない助成金の手動登録。
-  募集要項が変わったら手動で更新します。
-- `src/scrapers/index.ts` — `getAllScrapers()` でスクレイパーを登録し、全体を統括します。
+- `src/scrapers/known-grants.ts` — 毎年恒例の定番助成金カタログ（status `募集前`＋
+  `expectedPeriod` の例年時期）。募集要項が変わったら手動で更新します。
+- `src/scrapers/known-grants-checker.ts` — 定番リストの各公式ページを毎週フェッチし、
+  「締切/募集期間」語の近くの未来日付を検知したら `募集中` に自動昇格させます。
+- `src/scrapers/news-discovery-scraper.ts` — Google News RSS 横断検索によるマイナー
+  助成金の発掘（60日以内・上限20件、レポートの🔎セクションに掲載）。
+- `src/scrapers/shimisen-scraper.ts` — しみせん（京都市市民活動総合センター）の助成
+  情報まとめ。京都限定は除外し全国応募可のものを採用。
+- `src/scrapers/index.ts` — `getAllScrapers()` でスクレイパーを登録し、全体を統括。
+  `dedupeAcrossSources()`（情報源をまたぐ重複の畳み込み）もここにあります。
 - `src/reports/report-generator.ts` — Markdown / HTML / コンソールのレポート描画。
 - `src/server.ts` — 依存ライブラリ不要の `http` ダッシュボード。`GET /`（操作パネル）、
   `POST /api/search`（検索実行）、`GET /api/report`（最新 HTML レポート配信）。
@@ -105,14 +120,19 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 
 `Grant`（`src/models/grant.ts`）は全体で共有される唯一のレコード型です。フィールド：
 `id`、`name`、`organization`、`region`、`targetProjects`、`grantAmount`、
-`grantPeriod`、`applicationDeadline`、`personnelCosts`、`honorarium`、`rent`、
-`status`、`url`、`source`、`lastUpdated`。
+`grantPeriod`、`applicationDeadline`、`expectedPeriod`、`personnelCosts`、
+`honorarium`、`rent`、`status`、`url`、`source`、`lastUpdated`。
+
+`expectedPeriod` は「例年の募集時期」（例:「例年6〜7月頃（昨年実績: 2025/6/1〜7/9）」）で、
+`募集前`（＝🟡募集予定）のときにレポートへ表示されます。
 
 値が制限された型（自由文字列ではなく、以下のリテラルを使うこと）：
 
 - `Region`：`'全国' | '愛知県' | '長久手市'`
 - `Eligibility`（人件費／謝金／家賃）：`'可' | '不可' | '要確認' | '不明'`
 - `GrantStatus`：`'募集中' | '募集前' | '募集終了' | '不明'`
+  - `募集中`＝締切確認済みで今応募できる／`募集前`＝昨年度実績あり・新年度未発表
+    （例年時期を表示）／`募集終了`＝レポート非表示／`不明`＝要確認として表示
 
 `id` の規則：`` `${source}_${md5(name+organization).slice(0,8)}` ``
 （`BaseScraper.generateId` による）。手動登録では `known_musubie_fund` のような安定した
@@ -149,9 +169,18 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 5. ビルドして `npm run search` を実行し、新しいソースがコンソール出力とレポートに
    現れることを確認します。
 
-参考にできる既存スクレイパー：`canpan`（全国 DB）、`musubie`、`wam`
-（独立行政法人福祉医療機構）＝全国、`aichi_vc`（愛知県ボランティアセンター）＝愛知県、
-`nagakute`＝長久手市。
+**重要：解析ロジックは必ず実ページのHTMLで検証してから登録すること。**
+この環境から対象サイトへ直接アクセスできない場合は、デバッグ用ブランチに
+「push で起動し curl でページを取得して debug/ にコミットする一時ワークフロー」を
+作って実HTMLを入手し、コンパイル済みコードをそのHTMLに対して実行して件数・内容を
+確認します（過去に当て推量のセレクタで3ソースが沈黙0件になっていた教訓）。
+抽出0件時は警告ログを出す実装にしてください。
+
+参考にできる既存スクレイパー：`canpan`（全国 DB・一覧全ページ取得＋関連絞り込み）、
+`musubie`（.row-news 記事解析）、`wam`（募集情報アーカイブ→最新年度の詳細を判定）、
+`aichi_vc`（アーカイブをグループ化し募集中/募集前を判定）＝愛知県、
+`nagakute`＝長久手市、`shimisen`（まとめサイト・地域限定除外）、
+`news`（Google News RSS 発掘）。
 
 ## 生成物・無視されるパス
 
