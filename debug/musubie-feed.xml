@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	>
+
+<channel>
+	<title>認定NPO法人 全国こども食堂支援センター・むすびえ</title>
+	<atom:link href="https://musubie.org/news_cat/subsidy/feed" rel="self" type="application/rss+xml" />
+	<link>https://musubie.org</link>
+	<description>こども食堂の支援を通じて、誰も取りこぼさない社会をつくる。むすびえは、各地域のこども食堂ネットワーク支援を行い、こども食堂を応援してくれる企業・団体とこども食堂をつなぎ、こども食堂の意義や実態を伝え、理解を広げる調査・研究を行います。</description>
+	<lastBuildDate>Fri, 03 Jul 2026 00:32:55 +0000</lastBuildDate>
+	<language>ja</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=7.0</generator>
+
+<image>
+	<url>https://musubie.org/wp/wp-content/uploads/2025/05/cropped-logo-mark-32x32.png</url>
+	<title>認定NPO法人 全国こども食堂支援センター・むすびえ</title>
+	<link>https://musubie.org</link>
+	<width>32</width>
+	<height>32</height>
+</image> 
+</channel>
+</rss>
