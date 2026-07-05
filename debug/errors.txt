@@ -1,3 +1,7 @@
 FAILED: https://shimisen-kyoto.org/subsidies
 FAILED: https://shimisen-kyoto.org/subsidies/page/2
 FAILED: https://shimisen-kyoto.org/subsidies/page/3
+FAILED: https://shimisen-kyoto.org/subsidies
+FAILED: https://shimisen-kyoto.org/subsidies/page/2
+FAILED: https://shimisen-kyoto.org/subsidies/page/3
+FAILED: https://shimisen-kyoto.org/subsidy/52696
