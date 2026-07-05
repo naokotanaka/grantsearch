@@ -74,6 +74,13 @@ jobs:
           curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
             --data-urlencode "q=令和8年度子ども食堂・ヤングケアラー等応援プロジェクト 補助金" \
             "https://html.duckduckgo.com/html/" -o debug/ddg-test2.html || echo "FAILED: ddg2" >> debug/errors.txt
+          # 公式サイトの実ページ（詳細情報抽出の設計用・多様な6種）
+          fetch "https://tonami-shoujukai.or.jp/infomation" official-tonami.html
+          fetch "https://swf.or.jp/support1" official-swf.html
+          fetch "https://www.public.or.jp/project/f0136" official-public.html
+          fetch "https://www.family.co.jp/sustainability/with-sustainability/smileomu-pj.html" official-family.html
+          fetch "https://www.pref.aichi.jp/soshiki/jidoukatei/kodomoshokudou-hojokin.html" official-aichi.html
+          fetch "https://www.city.nagakute.lg.jp/soshiki/kodomobu/kodomokateika/1/1/21979.html" official-nagakute.html
           # Google News RSS（発見用・フォーマット確認）
           curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
             --data-urlencode "q=子ども食堂 助成金" \
