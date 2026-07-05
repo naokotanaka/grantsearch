@@ -66,6 +66,14 @@ jobs:
           curl -sSL --max-time 60 -H "User-Agent: $UA" -o /dev/null -w "%{url_effective}\n" \
             "https://news.google.com/rss/articles/CBMiTEFVX3lxTE1idURPLWd1WDVhZW5zSUNRR0N1WExTRG9ScVhmR1RMWXl3QTNLZ3Y3bkJ6T1JkbHlyenFsVUJxTGNqQzZTUGR2Z1NrMnE?oc=5" \
             > debug/news-redirect-result.txt 2>&1 || echo "FAILED" > debug/news-redirect-result.txt
+          # DuckDuckGo HTML検索の可用性テスト（検索フォールバック設計用）
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "q=洲崎福祉財団 一般助成 2026年度" \
+            "https://html.duckduckgo.com/html/" -o debug/ddg-test.html || echo "FAILED: ddg" >> debug/errors.txt
+          sleep 2
+          curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
+            --data-urlencode "q=令和8年度子ども食堂・ヤングケアラー等応援プロジェクト 補助金" \
+            "https://html.duckduckgo.com/html/" -o debug/ddg-test2.html || echo "FAILED: ddg2" >> debug/errors.txt
           # Google News RSS（発見用・フォーマット確認）
           curl -sSL --max-time 60 -H "User-Agent: $UA" -G \
             --data-urlencode "q=子ども食堂 助成金" \
