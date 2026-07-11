@@ -1,6 +1,6 @@
-import { BaseScraper } from './base-scraper';
-import { Grant } from '../models/grant';
-import { getKnownGrants } from './known-grants';
+import { BaseScraper } from "./base-scraper";
+import { Grant } from "../models/grant";
+import { getKnownGrants } from "./known-grants";
 
 /**
  * 定番リスト（known-grants）の自動チェック
@@ -12,7 +12,7 @@ import { getKnownGrants } from './known-grants';
  */
 class KnownGrantsChecker extends BaseScraper {
   constructor() {
-    super('known', '全国');
+    super("known", "全国");
   }
 
   /** BaseScraper の抽象メソッド実装（checkAll を使うこと） */
@@ -41,9 +41,11 @@ class KnownGrantsChecker extends BaseScraper {
     let text: string;
     try {
       const $ = await this.fetchPage(grant.url);
-      text = this.cleanText($('body').text());
+      text = this.cleanText($("body").text());
     } catch (error) {
-      console.log(`  [定番チェック] ${grant.name}: ページ取得失敗（募集前のまま）`);
+      console.log(
+        `  [定番チェック] ${grant.name}: ページ取得失敗（募集前のまま）`,
+      );
       return grant;
     }
 
@@ -53,16 +55,20 @@ class KnownGrantsChecker extends BaseScraper {
     const horizon = new Date(now);
     horizon.setMonth(horizon.getMonth() + 12); // 1年より先の日付はノイズとみなす
 
-    const anchorPattern = /(締切|締め切り|〆切|応募期間|募集期間|受付期間|申請期間|応募締切|申込期限)[^。｜|]{0,80}/g;
+    const anchorPattern =
+      /(締切|締め切り|〆切|応募期間|募集期間|受付期間|申請期間|応募締切|申込期限)[^。｜|]{0,80}/g;
     for (const match of text.matchAll(anchorPattern)) {
       const segment = this.cleanText(match[0]);
       const deadlineDate = this.lastDateIn(segment);
       if (deadlineDate && deadlineDate >= now && deadlineDate <= horizon) {
-        console.log(`  [定番チェック] ${grant.name}: 募集を検知（${segment.slice(0, 40)}…）`);
+        console.log(
+          `  [定番チェック] ${grant.name}: 募集を検知（${segment.slice(0, 40)}…）`,
+        );
         return {
           ...grant,
-          status: '募集中',
-          applicationDeadline: segment.length > 60 ? `${segment.slice(0, 60)}…` : segment,
+          status: "募集中",
+          applicationDeadline:
+            segment.length > 60 ? `${segment.slice(0, 60)}…` : segment,
           lastUpdated: new Date().toISOString(),
         };
       }
@@ -73,11 +79,15 @@ class KnownGrantsChecker extends BaseScraper {
 
   /** 文字列中の最後の日付を返す */
   private lastDateIn(text: string): Date | null {
-    const matches = [...text.matchAll(/(?:令和\d+年|\d{4}年)?\d{1,2}月\d{1,2}日/g)];
+    const matches = [
+      ...text.matchAll(/(?:令和\d+年|\d{4}年)?\d{1,2}月\d{1,2}日/g),
+    ];
     if (matches.length === 0) return null;
     // 年の記載がない「M月D日」は現在年として解釈する
     const last = matches[matches.length - 1][0];
-    const withYear = /令和|\d{4}年/.test(last) ? last : `${new Date().getFullYear()}年${last}`;
+    const withYear = /令和|\d{4}年/.test(last)
+      ? last
+      : `${new Date().getFullYear()}年${last}`;
     return this.parseJapaneseDate(withYear);
   }
 }

@@ -1,6 +1,6 @@
-import * as cheerio from 'cheerio';
-import { BaseScraper } from './base-scraper';
-import { Grant, Region } from '../models/grant';
+import * as cheerio from "cheerio";
+import { BaseScraper } from "./base-scraper";
+import { Grant, Region } from "../models/grant";
 
 /**
  * 愛知県社会福祉協議会ボランティアセンター「助成金等の情報」ページのスクレイパー
@@ -19,13 +19,13 @@ import { Grant, Region } from '../models/grant';
  * - それより古い → 事業終了とみなし非掲載
  */
 export class AichiVcScraper extends BaseScraper {
-  private pageUrl = 'http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html';
+  private pageUrl = "http://aichivc.jp/volunteer/ouenplaza/plaza_subsidy.html";
 
   /** 募集前として掲載する実績の新しさ（ヶ月） */
   private static readonly RECENT_MONTHS = 15;
 
   constructor() {
-    super('aichi_vc', '愛知県');
+    super("aichi_vc", "愛知県");
   }
 
   async search(): Promise<Grant[]> {
@@ -34,11 +34,16 @@ export class AichiVcScraper extends BaseScraper {
       const grants = this.parseDocument($);
 
       if (grants.length === 0) {
-        console.error('[愛知VC] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
+        console.error(
+          "[愛知VC] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）",
+        );
       }
       return grants;
     } catch (error) {
-      console.error('[愛知VC] ページ取得に失敗:', error instanceof Error ? error.message : error);
+      console.error(
+        "[愛知VC] ページ取得に失敗:",
+        error instanceof Error ? error.message : error,
+      );
       return [];
     }
   }
@@ -59,12 +64,12 @@ export class AichiVcScraper extends BaseScraper {
     const blocks: Block[] = [];
     let current: Block | null = null;
 
-    $('p').each((index, elem) => {
+    $("p").each((index, elem) => {
       const $p = $(elem);
       const text = this.cleanText($p.text());
-      const strongs = $p.find('strong');
+      const strongs = $p.find("strong");
 
-      if (text.startsWith('◆') && strongs.length > 0) {
+      if (text.startsWith("◆") && strongs.length > 0) {
         if (current) blocks.push(current);
 
         // 見出し行の全テキストから解析する。
@@ -73,15 +78,20 @@ export class AichiVcScraper extends BaseScraper {
         const isNew = /New/i.test(text);
         const closed = /[（(]\s*終了\s*[）)]/.test(text);
         let headerText = this.cleanText(
-          text.replace(/[◆◇♦]/g, '').replace(/[（(]\s*終了\s*[）)]/g, '').replace(/New/gi, '')
+          text
+            .replace(/[◆◇♦]/g, "")
+            .replace(/[（(]\s*終了\s*[）)]/g, "")
+            .replace(/New/gi, ""),
         );
 
         // 末尾の（…）を助成元とみなす（名前の途中の（…）はコース名等なので残す）
         let name = headerText;
-        let organization = '要確認';
+        let organization = "要確認";
         const orgMatch = headerText.match(/^(.*)[（(]([^（()）]*)[）)]\s*$/);
         if (orgMatch && this.cleanText(orgMatch[2])) {
-          name = this.cleanText(orgMatch[1]).replace(/[（(]\s*$/, '').trim();
+          name = this.cleanText(orgMatch[1])
+            .replace(/[（(]\s*$/, "")
+            .trim();
           organization = this.cleanText(orgMatch[2]);
         }
 
@@ -90,15 +100,15 @@ export class AichiVcScraper extends BaseScraper {
           organization,
           isNew,
           closed,
-          body: '',
-          url: '',
+          body: "",
+          url: "",
           order: index,
         };
       } else if (current) {
-        current.body += ' ' + text;
+        current.body += " " + text;
         if (!current.url) {
           const a = $p.find('a[href^="http"]').first();
-          if (a.length) current.url = a.attr('href') ?? '';
+          if (a.length) current.url = a.attr("href") ?? "";
         }
       }
     });
@@ -116,7 +126,7 @@ export class AichiVcScraper extends BaseScraper {
       if (block.name.length < 6) continue;
 
       const deadlineMatch = block.body.match(/期間[：:]\s*([^■]+)/);
-      const deadline = deadlineMatch ? this.cleanText(deadlineMatch[1]) : '';
+      const deadline = deadlineMatch ? this.cleanText(deadlineMatch[1]) : "";
       const key = `${this.normalizeProgramName(block.name)}|${block.organization}`;
 
       const rounds = programs.get(key) ?? [];
@@ -126,7 +136,9 @@ export class AichiVcScraper extends BaseScraper {
 
     const now = new Date();
     const recentCutoff = new Date(now);
-    recentCutoff.setMonth(recentCutoff.getMonth() - AichiVcScraper.RECENT_MONTHS);
+    recentCutoff.setMonth(
+      recentCutoff.getMonth() - AichiVcScraper.RECENT_MONTHS,
+    );
 
     const grants: Grant[] = [];
 
@@ -134,44 +146,58 @@ export class AichiVcScraper extends BaseScraper {
       try {
         // 最新ラウンド＝締切日が最も新しいもの（日付不明はページ順で先のもの）
         const latest = rounds.reduce((a, b) => {
-          if (a.deadlineDate && b.deadlineDate) return a.deadlineDate >= b.deadlineDate ? a : b;
+          if (a.deadlineDate && b.deadlineDate)
+            return a.deadlineDate >= b.deadlineDate ? a : b;
           if (a.deadlineDate) return a;
           if (b.deadlineDate) return b;
           return a.block.order <= b.block.order ? a : b;
         });
 
         const { block, deadline, deadlineDate } = latest;
-        const isOpen = !block.closed && deadlineDate !== null && deadlineDate >= now;
+        const isOpen =
+          !block.closed && deadlineDate !== null && deadlineDate >= now;
         const isNewUnclosed = !block.closed && block.isNew;
 
         // 名称・助成元に愛知/名古屋を含むものだけ愛知県、他は全国募集とみなす
-        const region: Region = /愛知|名古屋/.test(block.name + block.organization) ? '愛知県' : '全国';
-        const amountMatch = block.body.match(/補助額[】\]]?\s*([^）)■【]+[）)]?)/);
-        const grantAmount = amountMatch ? this.cleanText(amountMatch[1]) : '要確認';
+        const region: Region = /愛知|名古屋/.test(
+          block.name + block.organization,
+        )
+          ? "愛知県"
+          : "全国";
+        const amountMatch = block.body.match(
+          /補助額[】\]]?\s*([^）)■【]+[）)]?)/,
+        );
+        const grantAmount = amountMatch
+          ? this.cleanText(amountMatch[1])
+          : "要確認";
 
         if (isOpen || isNewUnclosed) {
           // 今募集中
-          grants.push(this.createGrant({
-            name: block.name,
-            organization: block.organization,
-            region,
-            applicationDeadline: deadline || '要確認',
-            grantAmount,
-            url: block.url || this.pageUrl,
-            status: '募集中',
-          }));
+          grants.push(
+            this.createGrant({
+              name: block.name,
+              organization: block.organization,
+              region,
+              applicationDeadline: deadline || "要確認",
+              grantAmount,
+              url: block.url || this.pageUrl,
+              status: "募集中",
+            }),
+          );
         } else if (deadlineDate !== null && deadlineDate >= recentCutoff) {
           // 直近15ヶ月以内に募集実績あり → 募集予定として予告掲載
-          grants.push(this.createGrant({
-            name: block.name,
-            organization: block.organization,
-            region,
-            applicationDeadline: '未発表',
-            expectedPeriod: this.buildExpectedPeriod(deadline),
-            grantAmount,
-            url: block.url || this.pageUrl,
-            status: '募集前',
-          }));
+          grants.push(
+            this.createGrant({
+              name: block.name,
+              organization: block.organization,
+              region,
+              applicationDeadline: "未発表",
+              expectedPeriod: this.buildExpectedPeriod(deadline),
+              grantAmount,
+              url: block.url || this.pageUrl,
+              status: "募集前",
+            }),
+          );
         }
         // それより古い実績しかないプログラムは非掲載（事業終了とみなす）
       } catch {
@@ -185,31 +211,38 @@ export class AichiVcScraper extends BaseScraper {
   /** 年度・回数などの表記を除いた基底名（同一プログラムの年度違いをまとめるため） */
   private normalizeProgramName(name: string): string {
     return name
-      .replace(/【[^】]*】/g, '')
-      .replace(/[（(][^）)]*[）)]/g, '')
-      .replace(/(20|２０)[0-9０-９]{2}\s*年度?/g, '')
-      .replace(/令和\s*[0-9０-９]+\s*年度?/g, '')
-      .replace(/第\s*[0-9０-９]+\s*[回期次]/g, '')
-      .replace(/(春|夏|秋|冬)期?募集/g, '')
-      .replace(/[\s　・]/g, '');
+      .replace(/【[^】]*】/g, "")
+      .replace(/[（(][^）)]*[）)]/g, "")
+      .replace(/(20|２０)[0-9０-９]{2}\s*年度?/g, "")
+      .replace(/令和\s*[0-9０-９]+\s*年度?/g, "")
+      .replace(/第\s*[0-9０-９]+\s*[回期次]/g, "")
+      .replace(/(春|夏|秋|冬)期?募集/g, "")
+      .replace(/[\s　・]/g, "");
   }
 
   /** 昨年実績の期間文字列から「例年◯月頃（昨年実績: …）」を組み立てる */
   private buildExpectedPeriod(lastPeriod: string): string {
-    if (!lastPeriod) return '時期不明（昨年度に募集実績あり）';
+    if (!lastPeriod) return "時期不明（昨年度に募集実績あり）";
 
-    const dates = [...lastPeriod.matchAll(/(?:令和\d+年|\d{4}年)(\d{1,2})月\d{1,2}日/g)];
+    const dates = [
+      ...lastPeriod.matchAll(/(?:令和\d+年|\d{4}年)(\d{1,2})月\d{1,2}日/g),
+    ];
     if (dates.length === 0) return `時期不明（昨年実績: ${lastPeriod}）`;
 
     const startMonth = parseInt(dates[0][1], 10);
     const endMonth = parseInt(dates[dates.length - 1][1], 10);
-    const monthLabel = startMonth === endMonth ? `例年${startMonth}月頃` : `例年${startMonth}月〜${endMonth}月頃`;
+    const monthLabel =
+      startMonth === endMonth
+        ? `例年${startMonth}月頃`
+        : `例年${startMonth}月〜${endMonth}月頃`;
     return `${monthLabel}（昨年実績: ${lastPeriod}）`;
   }
 
   /** 期間文字列の最後に現れる日付（＝締切側）を返す */
   private lastDateIn(text: string): Date | null {
-    const matches = [...text.matchAll(/(?:令和\d+年|\d{4}年)\d{1,2}月\d{1,2}日/g)];
+    const matches = [
+      ...text.matchAll(/(?:令和\d+年|\d{4}年)\d{1,2}月\d{1,2}日/g),
+    ];
     if (matches.length === 0) return null;
     return this.parseJapaneseDate(matches[matches.length - 1][0]);
   }

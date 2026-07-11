@@ -1,6 +1,6 @@
-import * as cheerio from 'cheerio';
-import { BaseScraper } from './base-scraper';
-import { Grant, Region } from '../models/grant';
+import * as cheerio from "cheerio";
+import { BaseScraper } from "./base-scraper";
+import { Grant, Region } from "../models/grant";
 
 /**
  * Google News RSS 横断検索による助成金発見スクレイパー
@@ -15,11 +15,11 @@ import { Grant, Region } from '../models/grant';
 export class NewsDiscoveryScraper extends BaseScraper {
   /** 検索キーワード（それぞれ別々にRSS検索する） */
   private static readonly QUERIES = [
-    '子ども食堂 助成金 募集',
-    '子育て支援 助成金 募集 NPO',
-    '学習支援 助成 募集 団体',
-    '外国ルーツ 子ども 助成',
-    'フードパントリー 助成 募集',
+    "子ども食堂 助成金 募集",
+    "子育て支援 助成金 募集 NPO",
+    "学習支援 助成 募集 団体",
+    "外国ルーツ 子ども 助成",
+    "フードパントリー 助成 募集",
   ];
 
   /** 掲載する記事の新しさ（日数） */
@@ -29,7 +29,7 @@ export class NewsDiscoveryScraper extends BaseScraper {
   private static readonly MAX_ITEMS = 20;
 
   constructor() {
-    super('news', '全国');
+    super("news", "全国");
   }
 
   async search(): Promise<Grant[]> {
@@ -38,13 +38,18 @@ export class NewsDiscoveryScraper extends BaseScraper {
     for (const query of NewsDiscoveryScraper.QUERIES) {
       try {
         const url =
-          'https://news.google.com/rss/search?q=' + encodeURIComponent(query) +
-          '&hl=ja&gl=JP&ceid=' + encodeURIComponent('JP:ja');
-        const response = await this.client.get(url, { responseType: 'text' });
+          "https://news.google.com/rss/search?q=" +
+          encodeURIComponent(query) +
+          "&hl=ja&gl=JP&ceid=" +
+          encodeURIComponent("JP:ja");
+        const response = await this.client.get(url, { responseType: "text" });
         const $ = cheerio.load(response.data, { xmlMode: true });
         grants.push(...this.parseRss($));
       } catch (error) {
-        console.error(`[News発見] 検索「${query}」に失敗:`, error instanceof Error ? error.message : error);
+        console.error(
+          `[News発見] 検索「${query}」に失敗:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
 
@@ -56,15 +61,17 @@ export class NewsDiscoveryScraper extends BaseScraper {
       .slice(0, NewsDiscoveryScraper.MAX_ITEMS);
 
     if (result.length === 0) {
-      console.error('[News発見] 記事を取得できませんでした（RSSの形式が変わった可能性があります）');
+      console.error(
+        "[News発見] 記事を取得できませんでした（RSSの形式が変わった可能性があります）",
+      );
     }
 
     // Google News の転送URLは機械では解決できないため、
     // 記事タイトルで検索して公式サイト（または元記事）のURLに差し替える
     for (const grant of result) {
       const official = await this.searchOfficialSite(
-        grant.name.replace(/…$/, ''),
-        NewsDiscoveryScraper.AGGREGATOR_SITES
+        grant.name.replace(/…$/, ""),
+        NewsDiscoveryScraper.AGGREGATOR_SITES,
       );
       if (official) grant.url = official;
     }
@@ -78,18 +85,20 @@ export class NewsDiscoveryScraper extends BaseScraper {
     const cutoff = new Date(now);
     cutoff.setDate(cutoff.getDate() - NewsDiscoveryScraper.MAX_AGE_DAYS);
 
-    $('item').each((_, elem) => {
+    $("item").each((_, elem) => {
       try {
         const $item = $(elem);
-        const rawTitle = this.cleanText($item.find('title').first().text());
-        const link = this.cleanText($item.find('link').first().text());
-        const pubDateText = this.cleanText($item.find('pubDate').first().text());
-        const sourceName = this.cleanText($item.find('source').first().text());
+        const rawTitle = this.cleanText($item.find("title").first().text());
+        const link = this.cleanText($item.find("link").first().text());
+        const pubDateText = this.cleanText(
+          $item.find("pubDate").first().text(),
+        );
+        const sourceName = this.cleanText($item.find("source").first().text());
 
         if (!rawTitle || !link) return;
 
         // タイトル末尾の「 - 配信元」を除去
-        const title = this.cleanText(rawTitle.replace(/\s*-\s*[^-]+$/, ''));
+        const title = this.cleanText(rawTitle.replace(/\s*-\s*[^-]+$/, ""));
 
         // 助成金の「募集告知」らしい記事のみ（贈呈式・寄付報告などは除外）
         if (!/助成|補助金|支援金|基金/.test(title)) return;
@@ -98,28 +107,39 @@ export class NewsDiscoveryScraper extends BaseScraper {
 
         // 配信日（古い記事は除外）
         const published = pubDateText ? new Date(pubDateText) : null;
-        if (!published || isNaN(published.getTime()) || published < cutoff) return;
+        if (!published || isNaN(published.getTime()) || published < cutoff)
+          return;
 
         // 地域の推定
-        const region: Region = /長久手/.test(title) ? '長久手市'
-          : /愛知|名古屋/.test(title) ? '愛知県' : '全国';
+        const region: Region = /長久手/.test(title)
+          ? "長久手市"
+          : /愛知|名古屋/.test(title)
+            ? "愛知県"
+            : "全国";
 
         // タイトルから締切らしき日付を抽出（あれば）
-        const deadlineMatch = title.match(/(\d{1,2}月\d{1,2}日)\s*(?:まで|締切|〆)/);
+        const deadlineMatch = title.match(
+          /(\d{1,2}月\d{1,2}日)\s*(?:まで|締切|〆)/,
+        );
 
-        grants.push(this.createGrant({
-          // 同じ記事が複数の配信元から流れるため、IDはタイトルのみから生成して重複を畳む
-          id: this.generateId(title, 'news'),
-          name: title.length > 70 ? `${title.slice(0, 70)}…` : title,
-          organization: sourceName || '要確認（記事参照）',
-          region,
-          targetProjects: 'ニュース/ブログから自動発見（内容はリンク先で要確認）',
-          grantAmount: '要確認',
-          grantPeriod: published.toISOString().slice(0, 10), // 配信日（並べ替え用）
-          applicationDeadline: deadlineMatch ? deadlineMatch[1] : '要確認（記事参照）',
-          url: link,
-          status: '不明',
-        }));
+        grants.push(
+          this.createGrant({
+            // 同じ記事が複数の配信元から流れるため、IDはタイトルのみから生成して重複を畳む
+            id: this.generateId(title, "news"),
+            name: title.length > 70 ? `${title.slice(0, 70)}…` : title,
+            organization: sourceName || "要確認（記事参照）",
+            region,
+            targetProjects:
+              "ニュース/ブログから自動発見（内容はリンク先で要確認）",
+            grantAmount: "要確認",
+            grantPeriod: published.toISOString().slice(0, 10), // 配信日（並べ替え用）
+            applicationDeadline: deadlineMatch
+              ? deadlineMatch[1]
+              : "要確認（記事参照）",
+            url: link,
+            status: "不明",
+          }),
+        );
       } catch {
         // 個別記事の解析エラーはスキップ
       }

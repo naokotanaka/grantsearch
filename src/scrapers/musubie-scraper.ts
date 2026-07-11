@@ -1,6 +1,6 @@
-import * as cheerio from 'cheerio';
-import { BaseScraper } from './base-scraper';
-import { Grant } from '../models/grant';
+import * as cheerio from "cheerio";
+import { BaseScraper } from "./base-scraper";
+import { Grant } from "../models/grant";
 
 /**
  * むすびえ（全国こども食堂支援センター）助成金情報スクレイパー
@@ -16,15 +16,15 @@ import { Grant } from '../models/grant';
  */
 export class MusubieScraper extends BaseScraper {
   private pageUrls = [
-    'https://musubie.org/news_cat/subsidy/',
-    'https://musubie.org/news_cat/subsidy/page/2/',
+    "https://musubie.org/news_cat/subsidy/",
+    "https://musubie.org/news_cat/subsidy/page/2/",
   ];
 
   /** 掲載する記事の新しさ（日数）。古い告知は募集終了の可能性が高いため除外 */
   private static readonly MAX_AGE_DAYS = 90;
 
   constructor() {
-    super('musubie', '全国');
+    super("musubie", "全国");
   }
 
   async search(): Promise<Grant[]> {
@@ -35,7 +35,10 @@ export class MusubieScraper extends BaseScraper {
         const $ = await this.fetchPage(url);
         grants.push(...this.parseListPage($));
       } catch (error) {
-        console.error(`[むすびえ] ページ取得に失敗 (${url}):`, error instanceof Error ? error.message : error);
+        console.error(
+          `[むすびえ] ページ取得に失敗 (${url}):`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
 
@@ -45,14 +48,23 @@ export class MusubieScraper extends BaseScraper {
     const result = Array.from(unique.values());
 
     if (result.length === 0) {
-      console.error('[むすびえ] 記事を抽出できませんでした（ページ構成が変わった可能性があります）');
+      console.error(
+        "[むすびえ] 記事を抽出できませんでした（ページ構成が変わった可能性があります）",
+      );
     }
 
     // 記事本文から公式サイトへのリンクを探して差し替える（本文コンテナ内のみ走査）
     for (const grant of result) {
       const official =
-        (await this.resolveOfficialUrl(grant.url, /musubie\.org|kodomoshokudou-network|kodomohinkon/, '.con-inner')) ??
-        (await this.searchOfficialSite(grant.name.replace(/…$/, ''), MusubieScraper.AGGREGATOR_SITES));
+        (await this.resolveOfficialUrl(
+          grant.url,
+          /musubie\.org|kodomoshokudou-network|kodomohinkon/,
+          ".con-inner",
+        )) ??
+        (await this.searchOfficialSite(
+          grant.name.replace(/…$/, ""),
+          MusubieScraper.AGGREGATOR_SITES,
+        ));
       if (official) grant.url = official;
     }
     return result;
@@ -65,41 +77,56 @@ export class MusubieScraper extends BaseScraper {
     const cutoff = new Date(now);
     cutoff.setDate(cutoff.getDate() - MusubieScraper.MAX_AGE_DAYS);
 
-    $('.row-news').each((_, elem) => {
+    $(".row-news").each((_, elem) => {
       try {
         const $item = $(elem);
-        const linkElem = $item.find('h3.entry-title a, h3 a').first();
+        const linkElem = $item.find("h3.entry-title a, h3 a").first();
         const title = this.cleanText(linkElem.text());
-        const href = linkElem.attr('href') ?? '';
+        const href = linkElem.attr("href") ?? "";
         if (!title || title.length < 8) return;
 
         // 助成関連の記事のみ
         if (!/助成|基金|補助|支援金|応援便|ギフト|寄贈/.test(title)) return;
         // 「募集開始」等の告知でない限り、採択結果・報告系の記事は除外
-        const isOpening = /募集開始|募集中|受付開始|公募開始|【助成金情報】/.test(title);
-        if (!isOpening && /報告|採択|結果発表|終了しました|発表のお知らせ/.test(title)) return;
+        const isOpening =
+          /募集開始|募集中|受付開始|公募開始|【助成金情報】/.test(title);
+        if (
+          !isOpening &&
+          /報告|採択|結果発表|終了しました|発表のお知らせ/.test(title)
+        )
+          return;
 
         // 記事日付（古い告知は除外）
-        const datetime = $item.find('time').attr('datetime') ?? '';
+        const datetime = $item.find("time").attr("datetime") ?? "";
         const published = datetime ? new Date(datetime) : null;
         if (published && published < cutoff) return;
 
-        const url = href.startsWith('http') ? href : `https://musubie.org${href}`;
+        const url = href.startsWith("http")
+          ? href
+          : `https://musubie.org${href}`;
 
         // タイトルから締切を抽出できれば利用
-        const deadlineMatch = title.match(/(\d{1,2}\/\d{1,2})\s*[〆締]/) ??
+        const deadlineMatch =
+          title.match(/(\d{1,2}\/\d{1,2})\s*[〆締]/) ??
           title.match(/締切[：:]?\s*(\d{1,2}月\d{1,2}日)/);
-        const deadline = deadlineMatch ? deadlineMatch[1] : '要確認（記事参照）';
+        const deadline = deadlineMatch
+          ? deadlineMatch[1]
+          : "要確認（記事参照）";
 
-        grants.push(this.createGrant({
-          name: title.length > 60 ? `${title.slice(0, 60)}…` : title,
-          organization: this.extractOrganization(title),
-          region: '全国',
-          targetProjects: 'こども食堂・フードパントリー・子どもの居場所づくり',
-          applicationDeadline: deadline,
-          url,
-          status: /募集開始|募集中|受付開始|公募/.test(title) ? '募集中' : '不明',
-        }));
+        grants.push(
+          this.createGrant({
+            name: title.length > 60 ? `${title.slice(0, 60)}…` : title,
+            organization: this.extractOrganization(title),
+            region: "全国",
+            targetProjects:
+              "こども食堂・フードパントリー・子どもの居場所づくり",
+            applicationDeadline: deadline,
+            url,
+            status: /募集開始|募集中|受付開始|公募/.test(title)
+              ? "募集中"
+              : "不明",
+          }),
+        );
       } catch {
         // 個別記事の解析エラーはスキップ
       }
@@ -111,7 +138,7 @@ export class MusubieScraper extends BaseScraper {
   /** 記事タイトルから助成元を推定 */
   private extractOrganization(title: string): string {
     // 先頭の【助成金情報】などのラベルを除去してから推定する
-    const stripped = this.cleanText(title.replace(/【[^】]*】/g, ''));
+    const stripped = this.cleanText(title.replace(/【[^】]*】/g, ""));
     const patterns = [
       /^([^「『（(]+?(?:財団|基金|株式会社|グループ|ホールディングス))/,
       /^(.+?)[＆&×]/,
@@ -121,6 +148,6 @@ export class MusubieScraper extends BaseScraper {
       const match = stripped.match(pattern);
       if (match && match[1].length <= 30) return this.cleanText(match[1]);
     }
-    return 'むすびえ掲載情報';
+    return "むすびえ掲載情報";
   }
 }

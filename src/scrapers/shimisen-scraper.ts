@@ -1,6 +1,6 @@
-import * as cheerio from 'cheerio';
-import { BaseScraper } from './base-scraper';
-import { Grant, SEARCH_KEYWORDS } from '../models/grant';
+import * as cheerio from "cheerio";
+import { BaseScraper } from "./base-scraper";
+import { Grant, SEARCH_KEYWORDS } from "../models/grant";
 
 /**
  * しみせん（京都市市民活動総合センター）助成金情報スクレイパー
@@ -18,18 +18,30 @@ import { Grant, SEARCH_KEYWORDS } from '../models/grant';
  * - ページ送りは /subsidies/page/N（現在3ページ）
  */
 export class ShimisenScraper extends BaseScraper {
-  private baseUrl = 'https://shimisen-kyoto.org';
+  private baseUrl = "https://shimisen-kyoto.org";
 
   private static readonly MAX_PAGES = 4;
 
   /** 関連分野の判定キーワード（CANPANと同じ発掘用拡張） */
   private static readonly EXTRA_KEYWORDS = [
-    '移民', '難民', 'ひとり親', '母子', '貧困', '孤立', '食支援', 'フードバンク',
-    '食育', '教育支援', '奨学', '子どもの居場所', 'こども', '青少年',
+    "移民",
+    "難民",
+    "ひとり親",
+    "母子",
+    "貧困",
+    "孤立",
+    "食支援",
+    "フードバンク",
+    "食育",
+    "教育支援",
+    "奨学",
+    "子どもの居場所",
+    "こども",
+    "青少年",
   ];
 
   constructor() {
-    super('shimisen', '全国');
+    super("shimisen", "全国");
   }
 
   async search(): Promise<Grant[]> {
@@ -37,13 +49,19 @@ export class ShimisenScraper extends BaseScraper {
 
     for (let page = 1; page <= ShimisenScraper.MAX_PAGES; page++) {
       try {
-        const url = page === 1 ? `${this.baseUrl}/subsidies` : `${this.baseUrl}/subsidies/page/${page}`;
+        const url =
+          page === 1
+            ? `${this.baseUrl}/subsidies`
+            : `${this.baseUrl}/subsidies/page/${page}`;
         const $ = await this.fetchPage(url);
         const result = this.parseListPage($);
         if (result.parsedItems === 0) break; // 最終ページを超えた
         grants.push(...result.grants);
       } catch (error) {
-        console.error(`[しみせん] ページ${page}の取得に失敗:`, error instanceof Error ? error.message : error);
+        console.error(
+          `[しみせん] ページ${page}の取得に失敗:`,
+          error instanceof Error ? error.message : error,
+        );
         break;
       }
     }
@@ -54,22 +72,33 @@ export class ShimisenScraper extends BaseScraper {
     const result = Array.from(unique.values());
 
     if (result.length === 0) {
-      console.error('[しみせん] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
+      console.error(
+        "[しみせん] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）",
+      );
     }
 
     // まとめ記事ではなく公式サイトへのリンクに差し替える
     // （詳細記事内の外部リンク → 見つからなければ助成金名で検索）
     for (const grant of result) {
       const official =
-        (await this.resolveOfficialUrl(grant.url, /shimisen-kyoto|kyoto-npo|hitomachi/)) ??
-        (await this.searchOfficialSite(`${grant.name} ${grant.organization}`, ShimisenScraper.AGGREGATOR_SITES));
+        (await this.resolveOfficialUrl(
+          grant.url,
+          /shimisen-kyoto|kyoto-npo|hitomachi/,
+        )) ??
+        (await this.searchOfficialSite(
+          `${grant.name} ${grant.organization}`,
+          ShimisenScraper.AGGREGATOR_SITES,
+        ));
       if (official) grant.url = official;
     }
     return result;
   }
 
   /** 一覧1ページを解析。parsedItems は絞り込み前の件数（ページ送り終端の判定用） */
-  private parseListPage($: cheerio.CheerioAPI): { grants: Grant[]; parsedItems: number } {
+  private parseListPage($: cheerio.CheerioAPI): {
+    grants: Grant[];
+    parsedItems: number;
+  } {
     const grants: Grant[] = [];
     let parsedItems = 0;
     const now = new Date();
@@ -79,49 +108,68 @@ export class ShimisenScraper extends BaseScraper {
         const $item = $(elem);
         parsedItems++;
 
-        const linkElem = $item.find('h2 a').first();
+        const linkElem = $item.find("h2 a").first();
         const name = this.cleanText(linkElem.text());
-        const href = linkElem.attr('href') ?? '';
+        const href = linkElem.attr("href") ?? "";
         if (!name || name.length < 4) return;
 
-        const organization = this.cleanText(
-          $item.find('.meta-subsidy').first().text().replace(/^by\s*/i, '')
-        ) || '要確認';
+        const organization =
+          this.cleanText(
+            $item
+              .find(".meta-subsidy")
+              .first()
+              .text()
+              .replace(/^by\s*/i, ""),
+          ) || "要確認";
 
-        const excerpt = this.cleanText($item.find('.grid-text p').first().text());
-        const tag = this.cleanText($item.find('.fa-tag').parent().text());
+        const excerpt = this.cleanText(
+          $item.find(".grid-text p").first().text(),
+        );
+        const tag = this.cleanText($item.find(".fa-tag").parent().text());
 
         // 関連分野に絞り込み（名称・タグは広めのキーワード、本文は強い分野語のみ）
-        if (!this.isRelevant(name + ' ' + tag, excerpt)) return;
+        if (!this.isRelevant(name + " " + tag, excerpt)) return;
 
         // 京都限定の助成金は除外（京都市の区役所事業を含む。助成元名だけの京都は許容）
         if (/京都|[上中下左右西]京区|東山区|山科区|伏見区/.test(name)) return;
         if (/区役所/.test(organization)) return;
-        if (/京都[市府]内|京都(市|府)?に(限|所在)|対象.{0,10}京都/.test(excerpt)) return;
+        if (
+          /京都[市府]内|京都(市|府)?に(限|所在)|対象.{0,10}京都/.test(excerpt)
+        )
+          return;
 
         // 応募・申請期間（日付内の空白を除去してから解析）
-        const periodRow = $item.find('th:contains("応募・申請期間")').closest('tr').find('td').first();
+        const periodRow = $item
+          .find('th:contains("応募・申請期間")')
+          .closest("tr")
+          .find("td")
+          .first();
         const period = this.cleanText(periodRow.text());
-        const compactPeriod = period.replace(/\s+/g, '');
-        const dates = [...compactPeriod.matchAll(/(\d{4})年(\d{1,2})月(\d{1,2})日/g)];
+        const compactPeriod = period.replace(/\s+/g, "");
+        const dates = [
+          ...compactPeriod.matchAll(/(\d{4})年(\d{1,2})月(\d{1,2})日/g),
+        ];
 
-        const url = href.startsWith('http') ? href : `${this.baseUrl}${href}`;
+        const url = href.startsWith("http") ? href : `${this.baseUrl}${href}`;
 
         if (dates.length === 0) {
           // 期間が読み取れない → 要確認として掲載
-          grants.push(this.createGrant({
-            name,
-            organization,
-            region: '全国',
-            targetProjects: excerpt.slice(0, 60),
-            applicationDeadline: period || '要確認',
-            url,
-            status: '不明',
-          }));
+          grants.push(
+            this.createGrant({
+              name,
+              organization,
+              region: "全国",
+              targetProjects: excerpt.slice(0, 60),
+              applicationDeadline: period || "要確認",
+              url,
+              status: "不明",
+            }),
+          );
           return;
         }
 
-        const toDate = (m: RegExpMatchArray) => new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+        const toDate = (m: RegExpMatchArray) =>
+          new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
         // 日付が1つだけの表記は「締切のみ」とみなす（開始日扱いにしない）
         const start = dates.length >= 2 ? toDate(dates[0]) : null;
         const end = toDate(dates[dates.length - 1]);
@@ -130,26 +178,30 @@ export class ShimisenScraper extends BaseScraper {
 
         if (start !== null && start > now) {
           // 開始前（発表済みのこれから募集）→ 募集前として予告掲載
-          grants.push(this.createGrant({
-            name,
-            organization,
-            region: '全国',
-            targetProjects: excerpt.slice(0, 60),
-            applicationDeadline: compactPeriod,
-            expectedPeriod: `募集予定（発表済み）: ${compactPeriod}`,
-            url,
-            status: '募集前',
-          }));
+          grants.push(
+            this.createGrant({
+              name,
+              organization,
+              region: "全国",
+              targetProjects: excerpt.slice(0, 60),
+              applicationDeadline: compactPeriod,
+              expectedPeriod: `募集予定（発表済み）: ${compactPeriod}`,
+              url,
+              status: "募集前",
+            }),
+          );
         } else {
-          grants.push(this.createGrant({
-            name,
-            organization,
-            region: '全国',
-            targetProjects: excerpt.slice(0, 60),
-            applicationDeadline: compactPeriod,
-            url,
-            status: '募集中',
-          }));
+          grants.push(
+            this.createGrant({
+              name,
+              organization,
+              region: "全国",
+              targetProjects: excerpt.slice(0, 60),
+              applicationDeadline: compactPeriod,
+              url,
+              status: "募集中",
+            }),
+          );
         }
       } catch {
         // 個別の解析エラーはスキップ
@@ -162,11 +214,19 @@ export class ShimisenScraper extends BaseScraper {
   /** 名称・タグは広めのキーワード、本文（説明抜粋）は誤検出を避けるため強い分野語のみで判定 */
   private isRelevant(nameAndTag: string, excerpt: string): boolean {
     const keywords = [...SEARCH_KEYWORDS, ...ShimisenScraper.EXTRA_KEYWORDS];
-    if (keywords.some(kw => nameAndTag.includes(kw))) return true;
+    if (keywords.some((kw) => nameAndTag.includes(kw))) return true;
     const strongTerms = [
-      '子ども食堂', 'こども食堂', '子どもの居場所', '学習支援', 'ひとり親',
-      '外国にルーツ', '多文化共生', 'フードバンク', 'フードパントリー', '子どもの貧困',
+      "子ども食堂",
+      "こども食堂",
+      "子どもの居場所",
+      "学習支援",
+      "ひとり親",
+      "外国にルーツ",
+      "多文化共生",
+      "フードバンク",
+      "フードパントリー",
+      "子どもの貧困",
     ];
-    return strongTerms.some(kw => excerpt.includes(kw));
+    return strongTerms.some((kw) => excerpt.includes(kw));
   }
 }

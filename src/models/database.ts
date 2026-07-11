@@ -1,10 +1,10 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
-import { Grant } from './grant';
+import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
+import { Grant } from "./grant";
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_PATH = path.join(DATA_DIR, 'grants.db');
+const DATA_DIR = path.join(process.cwd(), "data");
+const DB_PATH = path.join(DATA_DIR, "grants.db");
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -15,7 +15,7 @@ function ensureDataDir(): void {
 export function getDatabase(): Database.Database {
   ensureDataDir();
   const db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
+  db.pragma("journal_mode = WAL");
   initializeSchema(db);
   return db;
 }
@@ -52,7 +52,9 @@ function initializeSchema(db: Database.Database): void {
 
   // 既存DB向けの列追加マイグレーション（列が既にあれば無視）
   try {
-    db.exec("ALTER TABLE grants ADD COLUMN expected_period TEXT NOT NULL DEFAULT ''");
+    db.exec(
+      "ALTER TABLE grants ADD COLUMN expected_period TEXT NOT NULL DEFAULT ''",
+    );
   } catch {
     // 列が存在する場合はエラーになるが問題ない
   }
@@ -94,27 +96,41 @@ export function upsertGrants(db: Database.Database, grants: Grant[]): void {
 }
 
 export function getAllGrants(db: Database.Database): Grant[] {
-  const rows = db.prepare('SELECT * FROM grants ORDER BY application_deadline ASC').all() as any[];
+  const rows = db
+    .prepare("SELECT * FROM grants ORDER BY application_deadline ASC")
+    .all() as any[];
   return rows.map(rowToGrant);
 }
 
 export function getActiveGrants(db: Database.Database): Grant[] {
-  const rows = db.prepare(
-    "SELECT * FROM grants WHERE status IN ('募集中', '募集前', '不明') ORDER BY application_deadline ASC"
-  ).all() as any[];
+  const rows = db
+    .prepare(
+      "SELECT * FROM grants WHERE status IN ('募集中', '募集前', '不明') ORDER BY application_deadline ASC",
+    )
+    .all() as any[];
   return rows.map(rowToGrant);
 }
 
-export function getGrantsByRegion(db: Database.Database, region: string): Grant[] {
-  const rows = db.prepare(
-    'SELECT * FROM grants WHERE region = ? ORDER BY application_deadline ASC'
-  ).all(region) as any[];
+export function getGrantsByRegion(
+  db: Database.Database,
+  region: string,
+): Grant[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM grants WHERE region = ? ORDER BY application_deadline ASC",
+    )
+    .all(region) as any[];
   return rows.map(rowToGrant);
 }
 
-export function logSearch(db: Database.Database, source: string, grantsFound: number, error?: string): void {
+export function logSearch(
+  db: Database.Database,
+  source: string,
+  grantsFound: number,
+  error?: string,
+): void {
   db.prepare(
-    'INSERT INTO search_log (source, searched_at, grants_found, error) VALUES (?, ?, ?, ?)'
+    "INSERT INTO search_log (source, searched_at, grants_found, error) VALUES (?, ?, ?, ?)",
   ).run(source, new Date().toISOString(), grantsFound, error ?? null);
 }
 
@@ -128,7 +144,7 @@ function rowToGrant(row: any): Grant {
     grantAmount: row.grant_amount,
     grantPeriod: row.grant_period,
     applicationDeadline: row.application_deadline,
-    expectedPeriod: row.expected_period ?? '',
+    expectedPeriod: row.expected_period ?? "",
     personnelCosts: row.personnel_costs,
     honorarium: row.honorarium,
     rent: row.rent,

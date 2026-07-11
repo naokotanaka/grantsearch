@@ -1,6 +1,6 @@
-import * as cheerio from 'cheerio';
-import { BaseScraper } from './base-scraper';
-import { Grant, SEARCH_KEYWORDS } from '../models/grant';
+import * as cheerio from "cheerio";
+import { BaseScraper } from "./base-scraper";
+import { Grant, SEARCH_KEYWORDS } from "../models/grant";
 
 /**
  * CANPAN 助成制度データベースからのスクレイパー
@@ -15,19 +15,30 @@ import { Grant, SEARCH_KEYWORDS } from '../models/grant';
  *   対象事業、右列に <p class="status">募集中/募集予定/募集終了</p> と <p class="term">期間</p>
  */
 export class CanpanScraper extends BaseScraper {
-  private baseUrl = 'https://fields.canpan.info';
+  private baseUrl = "https://fields.canpan.info";
 
   /** 取得する最大ページ数（現在は92件≒5ページ。余裕を持たせる） */
   private static readonly MAX_PAGES = 8;
 
   /** 関連分野の判定キーワード（SEARCH_KEYWORDS に発掘用の語を追加） */
   private static readonly EXTRA_KEYWORDS = [
-    '移民', '難民', 'ひとり親', '母子', '貧困', '孤立', '食支援', 'フードバンク',
-    '食育', '教育支援', '奨学', '子どもの居場所', 'こども',
+    "移民",
+    "難民",
+    "ひとり親",
+    "母子",
+    "貧困",
+    "孤立",
+    "食支援",
+    "フードバンク",
+    "食育",
+    "教育支援",
+    "奨学",
+    "子どもの居場所",
+    "こども",
   ];
 
   constructor() {
-    super('canpan', '全国');
+    super("canpan", "全国");
   }
 
   async search(): Promise<Grant[]> {
@@ -41,7 +52,10 @@ export class CanpanScraper extends BaseScraper {
         if (pageGrants.parsedRows === 0) break; // 最終ページを超えた
         grants.push(...pageGrants.grants);
       } catch (error) {
-        console.error(`[CANPAN] ページ${page}の取得に失敗:`, error instanceof Error ? error.message : error);
+        console.error(
+          `[CANPAN] ページ${page}の取得に失敗:`,
+          error instanceof Error ? error.message : error,
+        );
         break;
       }
     }
@@ -52,25 +66,33 @@ export class CanpanScraper extends BaseScraper {
     const result = Array.from(unique.values());
 
     if (result.length === 0) {
-      console.error('[CANPAN] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）');
+      console.error(
+        "[CANPAN] 助成金を抽出できませんでした（ページ構成が変わった可能性があります）",
+      );
     }
 
     // CANPANの詳細ページではなく公式サイトへのリンクに差し替える
     for (const grant of result) {
       const official =
         (await this.resolveOfficialUrl(grant.url, /canpan\.info/)) ??
-        (await this.searchOfficialSite(`${grant.name} ${grant.organization}`, CanpanScraper.AGGREGATOR_SITES));
+        (await this.searchOfficialSite(
+          `${grant.name} ${grant.organization}`,
+          CanpanScraper.AGGREGATOR_SITES,
+        ));
       if (official) grant.url = official;
     }
     return result;
   }
 
   /** 一覧1ページを解析。parsedRows は関連判定前の行数（ページ送り終端の判定用） */
-  private parseListPage($: cheerio.CheerioAPI): { grants: Grant[]; parsedRows: number } {
+  private parseListPage($: cheerio.CheerioAPI): {
+    grants: Grant[];
+    parsedRows: number;
+  } {
     const grants: Grant[] = [];
     let parsedRows = 0;
 
-    $('tr').each((_, elem) => {
+    $("tr").each((_, elem) => {
       try {
         const $row = $(elem);
         const nameLink = $row.find('a[href*="/grant/detail/"]').first();
@@ -78,47 +100,57 @@ export class CanpanScraper extends BaseScraper {
         parsedRows++;
 
         const name = this.cleanText(nameLink.text());
-        const href = nameLink.attr('href') ?? '';
-        const url = href.startsWith('http') ? href : `${this.baseUrl}${href}`;
+        const href = nameLink.attr("href") ?? "";
+        const url = href.startsWith("http") ? href : `${this.baseUrl}${href}`;
 
-        const organization = this.cleanText(
-          $row.find('a[href*="/organization/detail/"]').first().text()
-        ) || '要確認';
+        const organization =
+          this.cleanText(
+            $row.find('a[href*="/organization/detail/"]').first().text(),
+          ) || "要確認";
 
         // dl 内の最後の dd が対象事業
-        const targetProjects = this.cleanText($row.find('dl dd').last().text());
+        const targetProjects = this.cleanText($row.find("dl dd").last().text());
 
-        const statusText = this.cleanText($row.find('p.status').first().text());
-        const term = this.cleanText($row.find('p.term').first().text());
+        const statusText = this.cleanText($row.find("p.status").first().text());
+        const term = this.cleanText($row.find("p.term").first().text());
 
         if (!name || name.length < 4) return;
-        if (statusText === '募集終了') return;
+        if (statusText === "募集終了") return;
         if (/助成制度では(ございません|ありません)/.test(name)) return; // 注記付きの非助成情報
         if (!this.isRelevant(`${name} ${targetProjects}`)) return;
 
-        if (statusText === '募集予定') {
+        if (statusText === "募集予定") {
           // 募集期間が発表済みの「これから募集」→ 募集前として予告掲載
-          grants.push(this.createGrant({
-            name,
-            organization,
-            region: '全国',
-            targetProjects,
-            applicationDeadline: term || '未発表',
-            expectedPeriod: term ? `募集予定（発表済み）: ${term}` : '募集予定（時期未発表）',
-            url,
-            status: '募集前',
-          }));
+          grants.push(
+            this.createGrant({
+              name,
+              organization,
+              region: "全国",
+              targetProjects,
+              applicationDeadline: term || "未発表",
+              expectedPeriod: term
+                ? `募集予定（発表済み）: ${term}`
+                : "募集予定（時期未発表）",
+              url,
+              status: "募集前",
+            }),
+          );
         } else {
           // 募集中（またはステータス不明だが掲載されているもの）
-          grants.push(this.createGrant({
-            name,
-            organization,
-            region: '全国',
-            targetProjects,
-            applicationDeadline: term || '要確認',
-            url,
-            status: statusText === '募集中' ? '募集中' : this.detectStatus(statusText, term),
-          }));
+          grants.push(
+            this.createGrant({
+              name,
+              organization,
+              region: "全国",
+              targetProjects,
+              applicationDeadline: term || "要確認",
+              url,
+              status:
+                statusText === "募集中"
+                  ? "募集中"
+                  : this.detectStatus(statusText, term),
+            }),
+          );
         }
       } catch {
         // 個別行の解析エラーはスキップ
@@ -130,6 +162,6 @@ export class CanpanScraper extends BaseScraper {
 
   private isRelevant(text: string): boolean {
     const keywords = [...SEARCH_KEYWORDS, ...CanpanScraper.EXTRA_KEYWORDS];
-    return keywords.some(kw => text.includes(kw));
+    return keywords.some((kw) => text.includes(kw));
   }
 }

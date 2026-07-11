@@ -1,7 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { Grant, Eligibility } from '../models/grant';
+import Anthropic from "@anthropic-ai/sdk";
+import axios from "axios";
+import * as cheerio from "cheerio";
+import { Grant, Eligibility } from "../models/grant";
 
 /**
  * 公式ページ読み取りによる詳細情報の充填（AIエンリッチメント）
@@ -24,7 +24,7 @@ const NPO_PROFILE = `
 `.trim();
 
 /** モデル（環境変数で上書き可。既定は軽量・低コストの Haiku） */
-const MODEL = process.env.CLAUDE_MODEL ?? 'claude-haiku-4-5';
+const MODEL = process.env.CLAUDE_MODEL ?? "claude-haiku-4-5";
 
 /** 1回の実行で読み取る公式ページの上限（コスト暴走の防止） */
 const MAX_PAGES = 150;
@@ -33,7 +33,7 @@ const MAX_PAGES = 150;
 const MAX_TEXT_LENGTH = 8000;
 
 interface ExtractionResult {
-  applicable: '可能' | '対象外' | '要確認';
+  applicable: "可能" | "対象外" | "要確認";
   reason: string;
   targetOrganizations: string;
   grantAmount: string;
@@ -45,31 +45,66 @@ interface ExtractionResult {
   summary: string;
 }
 
-const ELIGIBILITY_ENUM = ['可', '不可', '要確認', '不明'];
+const ELIGIBILITY_ENUM = ["可", "不可", "要確認", "不明"];
 
 /** 構造化出力のスキーマ（Claude の応答をこの形に強制する） */
 const EXTRACTION_SCHEMA = {
-  type: 'object',
+  type: "object",
   additionalProperties: false,
   required: [
-    'applicable', 'reason', 'targetOrganizations', 'grantAmount', 'grantPeriod',
-    'applicationDeadline', 'personnelCosts', 'honorarium', 'rent', 'summary',
+    "applicable",
+    "reason",
+    "targetOrganizations",
+    "grantAmount",
+    "grantPeriod",
+    "applicationDeadline",
+    "personnelCosts",
+    "honorarium",
+    "rent",
+    "summary",
   ],
   properties: {
     applicable: {
-      type: 'string',
-      enum: ['可能', '対象外', '要確認'],
-      description: 'この団体がこの助成金に応募できるか',
+      type: "string",
+      enum: ["可能", "対象外", "要確認"],
+      description: "この団体がこの助成金に応募できるか",
     },
-    reason: { type: 'string', description: '応募可否の判断理由（1文）' },
-    targetOrganizations: { type: 'string', description: '応募できる団体の条件。ページに記載がなければ「不明」' },
-    grantAmount: { type: 'string', description: '助成額（上限など）。記載がなければ「不明」' },
-    grantPeriod: { type: 'string', description: '助成対象期間。記載がなければ「不明」' },
-    applicationDeadline: { type: 'string', description: '申込期間・締切。記載がなければ「不明」' },
-    personnelCosts: { type: 'string', enum: ELIGIBILITY_ENUM, description: '人件費に使えるか' },
-    honorarium: { type: 'string', enum: ELIGIBILITY_ENUM, description: '謝金に使えるか' },
-    rent: { type: 'string', enum: ELIGIBILITY_ENUM, description: '家賃・賃借料に使えるか' },
-    summary: { type: 'string', description: 'この助成金の内容の一言要約（40字以内）' },
+    reason: { type: "string", description: "応募可否の判断理由（1文）" },
+    targetOrganizations: {
+      type: "string",
+      description: "応募できる団体の条件。ページに記載がなければ「不明」",
+    },
+    grantAmount: {
+      type: "string",
+      description: "助成額（上限など）。記載がなければ「不明」",
+    },
+    grantPeriod: {
+      type: "string",
+      description: "助成対象期間。記載がなければ「不明」",
+    },
+    applicationDeadline: {
+      type: "string",
+      description: "申込期間・締切。記載がなければ「不明」",
+    },
+    personnelCosts: {
+      type: "string",
+      enum: ELIGIBILITY_ENUM,
+      description: "人件費に使えるか",
+    },
+    honorarium: {
+      type: "string",
+      enum: ELIGIBILITY_ENUM,
+      description: "謝金に使えるか",
+    },
+    rent: {
+      type: "string",
+      enum: ELIGIBILITY_ENUM,
+      description: "家賃・賃借料に使えるか",
+    },
+    summary: {
+      type: "string",
+      description: "この助成金の内容の一言要約（40字以内）",
+    },
   },
 } as const;
 
@@ -97,19 +132,22 @@ function getClient(): Anthropic | null {
 const httpClient = axios.create({
   timeout: 30000,
   headers: {
-    'User-Agent': 'GrantSearch/1.0 (NPO Grant Research Tool)',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'ja,en;q=0.5',
+    "User-Agent": "GrantSearch/1.0 (NPO Grant Research Tool)",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,en;q=0.5",
   },
 });
 
 /** 公式ページの本文テキストを取得（スクリプト等を除去して圧縮） */
 export async function fetchPageText(url: string): Promise<string | null> {
   try {
-    const response = await httpClient.get(url, { responseType: 'text' });
+    const response = await httpClient.get(url, { responseType: "text" });
     const $ = cheerio.load(response.data);
-    $('script, style, nav, footer, header, noscript, iframe').remove();
-    const text = $('body').text().replace(/[\s\n\r\t]+/g, ' ').trim();
+    $("script, style, nav, footer, header, noscript, iframe").remove();
+    const text = $("body")
+      .text()
+      .replace(/[\s\n\r\t]+/g, " ")
+      .trim();
     return text.length > 200 ? text.slice(0, MAX_TEXT_LENGTH) : null; // 短すぎるページは情報なしとみなす
   } catch {
     return null;
@@ -121,7 +159,11 @@ function isEnrichable(grant: Grant): boolean {
   if (!/^https?:\/\//.test(grant.url)) return false;
   if (/\.pdf($|[?#])/i.test(grant.url)) return false;
   if (/news\.google\.com/.test(grant.url)) return false; // 転送URLは読めない
-  return grant.status === '募集中' || grant.status === '募集前' || grant.status === '不明';
+  return (
+    grant.status === "募集中" ||
+    grant.status === "募集前" ||
+    grant.status === "不明"
+  );
 }
 
 /**
@@ -131,10 +173,16 @@ function isEnrichable(grant: Grant): boolean {
 export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
   const client = getClient();
   if (client) {
-    console.log(`\n🤖 公式ページをAIで読み取り中（モデル: ${MODEL}、対象 ${Math.min(grants.filter(isEnrichable).length, MAX_PAGES)}件）...`);
+    console.log(
+      `\n🤖 公式ページをAIで読み取り中（モデル: ${MODEL}、対象 ${Math.min(grants.filter(isEnrichable).length, MAX_PAGES)}件）...`,
+    );
   } else {
-    console.log('\nℹ ANTHROPIC_API_KEY が未設定のため、ルールベースの簡易抽出で公式ページを読み取ります');
-    console.log('  （GitHub の Settings → Secrets and variables → Actions に ANTHROPIC_API_KEY を登録するとAI読み取りが有効になります）');
+    console.log(
+      "\nℹ ANTHROPIC_API_KEY が未設定のため、ルールベースの簡易抽出で公式ページを読み取ります",
+    );
+    console.log(
+      "  （GitHub の Settings → Secrets and variables → Actions に ANTHROPIC_API_KEY を登録するとAI読み取りが有効になります）",
+    );
   }
 
   const result: Grant[] = [];
@@ -157,9 +205,11 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
     try {
       if (client) {
         const extraction = await extractWithAI(client, grant, pageText);
-        if (extraction.applicable === '対象外') {
+        if (extraction.applicable === "対象外") {
           excluded++;
-          console.log(`  ✗ 対象外: ${grant.name.slice(0, 40)}（${extraction.reason.slice(0, 50)}）`);
+          console.log(
+            `  ✗ 対象外: ${grant.name.slice(0, 40)}（${extraction.reason.slice(0, 50)}）`,
+          );
           continue; // 掲載しない
         }
         result.push(applyExtraction(grant, extraction));
@@ -167,103 +217,141 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
         result.push(applyHeuristics(grant, pageText));
       }
     } catch (error) {
-      console.error(`  ⚠ 読み取り失敗: ${grant.name.slice(0, 30)} - ${error instanceof Error ? error.message : error}`);
+      console.error(
+        `  ⚠ 読み取り失敗: ${grant.name.slice(0, 30)} - ${error instanceof Error ? error.message : error}`,
+      );
       result.push(grant); // 失敗時はそのまま掲載
     }
   }
 
-  console.log(`  → ${processed}ページを読み取り、対象外 ${excluded}件を除外しました`);
+  console.log(
+    `  → ${processed}ページを読み取り、対象外 ${excluded}件を除外しました`,
+  );
   return result;
 }
 
 /** Claude に公式ページを読ませて構造化データを抽出する */
-async function extractWithAI(client: Anthropic, grant: Grant, pageText: string): Promise<ExtractionResult> {
+async function extractWithAI(
+  client: Anthropic,
+  grant: Grant,
+  pageText: string,
+): Promise<ExtractionResult> {
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
-    output_config: { format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
+    output_config: {
+      format: { type: "json_schema", schema: EXTRACTION_SCHEMA },
+    },
     messages: [
       {
-        role: 'user',
+        role: "user",
         content: `以下は助成金「${grant.name}」（${grant.organization}）の公式ページ本文です。指定の項目を抽出してください。\n\n---\n${pageText}`,
       },
     ],
   });
 
-  const textBlock = response.content.find(b => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
-    throw new Error('AI応答にテキストがありません');
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") {
+    throw new Error("AI応答にテキストがありません");
   }
   return JSON.parse(textBlock.text) as ExtractionResult;
 }
 
 /** 抽出結果を Grant に反映（既に良い値がある項目は上書きしない） */
 function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
-  const isEmpty = (v: string) => !v || v === '要確認' || v === '不明' || v.startsWith('要確認');
+  const isEmpty = (v: string) =>
+    !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
   const pick = (current: string, extracted: string) =>
     isEmpty(current) && !isEmpty(extracted) ? extracted : current;
 
   // 対象団体＋要約を「対象事業」欄に表示（応募可否の判断材料が一目で分かるように）
   const targetInfo = [
-    ex.summary && ex.summary !== '不明' ? ex.summary : '',
-    ex.targetOrganizations && ex.targetOrganizations !== '不明' ? `【対象】${ex.targetOrganizations}` : '',
-    ex.applicable === '要確認' ? `【要確認】${ex.reason}` : '',
-  ].filter(Boolean).join(' ');
+    ex.summary && ex.summary !== "不明" ? ex.summary : "",
+    ex.targetOrganizations && ex.targetOrganizations !== "不明"
+      ? `【対象】${ex.targetOrganizations}`
+      : "",
+    ex.applicable === "要確認" ? `【要確認】${ex.reason}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return {
     ...grant,
     targetProjects: targetInfo || grant.targetProjects,
     grantAmount: pick(grant.grantAmount, ex.grantAmount),
     grantPeriod: pick(grant.grantPeriod, ex.grantPeriod),
-    applicationDeadline: pick(grant.applicationDeadline, ex.applicationDeadline),
-    personnelCosts: grant.personnelCosts === '不明' ? ex.personnelCosts : grant.personnelCosts,
-    honorarium: grant.honorarium === '不明' ? ex.honorarium : grant.honorarium,
-    rent: grant.rent === '不明' ? ex.rent : grant.rent,
+    applicationDeadline: pick(
+      grant.applicationDeadline,
+      ex.applicationDeadline,
+    ),
+    personnelCosts:
+      grant.personnelCosts === "不明"
+        ? ex.personnelCosts
+        : grant.personnelCosts,
+    honorarium: grant.honorarium === "不明" ? ex.honorarium : grant.honorarium,
+    rent: grant.rent === "不明" ? ex.rent : grant.rent,
   };
 }
 
 /** キー未設定時のルールベース抽出（AIより粗いが無料） */
 function applyHeuristics(grant: Grant, pageText: string): Grant {
-  const isEmpty = (v: string) => !v || v === '要確認' || v === '不明' || v.startsWith('要確認');
+  const isEmpty = (v: string) =>
+    !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
   const updated = { ...grant };
 
   // 助成額
   if (isEmpty(updated.grantAmount)) {
-    const amount = pageText.match(/(?:助成|補助)(?:金額|額|上限)[^。]{0,10}?([0-9,０-９]+\s*万?円[^。、\s]{0,10})/) ??
-      pageText.match(/上限[^。]{0,6}?([0-9,０-９]+\s*万円)/);
+    const amount =
+      pageText.match(
+        /(?:助成|補助)(?:金額|額|上限)[^。]{0,10}?([0-9,０-９]+\s*万?円[^。、\s]{0,10})/,
+      ) ?? pageText.match(/上限[^。]{0,6}?([0-9,０-９]+\s*万円)/);
     if (amount) updated.grantAmount = amount[1];
   }
 
   // 経費の可否
   const expenses = detectExpenses(pageText);
-  if (updated.personnelCosts === '不明') updated.personnelCosts = expenses.personnelCosts;
-  if (updated.honorarium === '不明') updated.honorarium = expenses.honorarium;
-  if (updated.rent === '不明') updated.rent = expenses.rent;
+  if (updated.personnelCosts === "不明")
+    updated.personnelCosts = expenses.personnelCosts;
+  if (updated.honorarium === "不明") updated.honorarium = expenses.honorarium;
+  if (updated.rent === "不明") updated.rent = expenses.rent;
 
   // 対象団体
   if (isEmpty(updated.targetProjects)) {
-    const target = pageText.match(/(?:助成)?対象(?:となる)?(?:団体|者)[^。]{0,5}[：:は]?\s*([^。]{10,80})/);
+    const target = pageText.match(
+      /(?:助成)?対象(?:となる)?(?:団体|者)[^。]{0,5}[：:は]?\s*([^。]{10,80})/,
+    );
     if (target) updated.targetProjects = `【対象】${target[1].trim()}`;
   }
 
   return updated;
 }
 
-function detectExpenses(text: string): { personnelCosts: Eligibility; honorarium: Eligibility; rent: Eligibility } {
+function detectExpenses(text: string): {
+  personnelCosts: Eligibility;
+  honorarium: Eligibility;
+  rent: Eligibility;
+} {
   const result = {
-    personnelCosts: '不明' as Eligibility,
-    honorarium: '不明' as Eligibility,
-    rent: '不明' as Eligibility,
+    personnelCosts: "不明" as Eligibility,
+    honorarium: "不明" as Eligibility,
+    rent: "不明" as Eligibility,
   };
   if (/人件費/.test(text)) {
-    result.personnelCosts = /人件費[^。]{0,20}(不可|除く|対象外|認められません)/.test(text) ? '不可' : '可';
+    result.personnelCosts =
+      /人件費[^。]{0,20}(不可|除く|対象外|認められません)/.test(text)
+        ? "不可"
+        : "可";
   }
   if (/謝金|謝礼/.test(text)) {
-    result.honorarium = /(謝金|謝礼)[^。]{0,20}(不可|除く|対象外)/.test(text) ? '不可' : '可';
+    result.honorarium = /(謝金|謝礼)[^。]{0,20}(不可|除く|対象外)/.test(text)
+      ? "不可"
+      : "可";
   }
   if (/家賃|賃借料/.test(text)) {
-    result.rent = /(家賃|賃借料)[^。]{0,20}(不可|除く|対象外)/.test(text) ? '不可' : '可';
+    result.rent = /(家賃|賃借料)[^。]{0,20}(不可|除く|対象外)/.test(text)
+      ? "不可"
+      : "可";
   }
   return result;
 }

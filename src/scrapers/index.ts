@@ -1,16 +1,16 @@
-import { BaseScraper } from './base-scraper';
-import { CanpanScraper } from './canpan-scraper';
-import { AichiVcScraper } from './aichi-vc-scraper';
-import { NagakuteScraper } from './nagakute-scraper';
-import { MusubieScraper } from './musubie-scraper';
-import { WamScraper } from './wam-scraper';
-import { ShimisenScraper } from './shimisen-scraper';
-import { NewsDiscoveryScraper } from './news-discovery-scraper';
-import { getKnownGrants } from './known-grants';
-import { checkKnownGrants } from './known-grants-checker';
-import { Grant, EXCLUDE_KEYWORDS } from '../models/grant';
-import { getDatabase, upsertGrants, logSearch } from '../models/database';
-import { enrichGrants } from '../enrich/ai-enricher';
+import { BaseScraper } from "./base-scraper";
+import { CanpanScraper } from "./canpan-scraper";
+import { AichiVcScraper } from "./aichi-vc-scraper";
+import { NagakuteScraper } from "./nagakute-scraper";
+import { MusubieScraper } from "./musubie-scraper";
+import { WamScraper } from "./wam-scraper";
+import { ShimisenScraper } from "./shimisen-scraper";
+import { NewsDiscoveryScraper } from "./news-discovery-scraper";
+import { getKnownGrants } from "./known-grants";
+import { checkKnownGrants } from "./known-grants-checker";
+import { Grant, EXCLUDE_KEYWORDS } from "../models/grant";
+import { getDatabase, upsertGrants, logSearch } from "../models/database";
+import { enrichGrants } from "../enrich/ai-enricher";
 
 /** 全スクレイパーの一覧 */
 function getAllScrapers(): BaseScraper[] {
@@ -31,13 +31,15 @@ export async function searchAllSources(): Promise<Grant[]> {
   const allGrants: Grant[] = [];
 
   // 1. 定番リストの読み込み＋公式ページとの突き合わせ（募集検知で自動昇格）
-  console.log('📋 定番助成金リストを確認中（各公式ページをチェック）...');
+  console.log("📋 定番助成金リストを確認中（各公式ページをチェック）...");
   const knownGrants = await checkKnownGrants();
   allGrants.push(...knownGrants);
   upsertGrants(db, knownGrants);
-  logSearch(db, 'known', knownGrants.length);
-  const openCount = knownGrants.filter(g => g.status === '募集中').length;
-  console.log(`  → ${knownGrants.length}件の定番助成金を登録（うち募集検知 ${openCount}件）`);
+  logSearch(db, "known", knownGrants.length);
+  const openCount = knownGrants.filter((g) => g.status === "募集中").length;
+  console.log(
+    `  → ${knownGrants.length}件の定番助成金を登録（うち募集検知 ${openCount}件）`,
+  );
 
   // 2. 各Webスクレイパーの実行
   const scrapers = getAllScrapers();
@@ -53,8 +55,10 @@ export async function searchAllSources(): Promise<Grant[]> {
       logSearch(db, scraperName, grants.length);
       if (grants.length === 0) {
         // 0件は「該当なし」ではなく解析不全の可能性が高いため、警告として記録する
-        console.warn(`  ⚠ ${scraperName}: 0件（ページ構成の変化による解析不全の可能性あり）`);
-        logSearch(db, scraperName, 0, '抽出0件（要確認）');
+        console.warn(
+          `  ⚠ ${scraperName}: 0件（ページ構成の変化による解析不全の可能性あり）`,
+        );
+        logSearch(db, scraperName, 0, "抽出0件（要確認）");
       } else {
         console.log(`  → ${grants.length}件の助成金情報を取得`);
       }
@@ -77,10 +81,11 @@ export async function searchAllSources(): Promise<Grant[]> {
   const deduped = dedupeAcrossSources(Array.from(uniqueGrants.values()));
 
   // 活動分野外（被災地・災害支援など）は掲載しない
-  const inScope = deduped.filter(g => {
+  const inScope = deduped.filter((g) => {
     const text = g.name + g.targetProjects;
-    const hit = EXCLUDE_KEYWORDS.find(kw => text.includes(kw));
-    if (hit) console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
+    const hit = EXCLUDE_KEYWORDS.find((kw) => text.includes(kw));
+    if (hit)
+      console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
     return !hit;
   });
 
@@ -88,10 +93,12 @@ export async function searchAllSources(): Promise<Grant[]> {
   // 応募対象外と判断されたものはここで除外される。
   const result = await enrichGrants(inScope);
   const statusCounts = {
-    募集中: result.filter(g => g.status === '募集中').length,
-    募集前: result.filter(g => g.status === '募集前').length,
+    募集中: result.filter((g) => g.status === "募集中").length,
+    募集前: result.filter((g) => g.status === "募集前").length,
   };
-  console.log(`\n✅ 合計: ${result.length}件（募集中 ${statusCounts.募集中}件 / 募集予定 ${statusCounts.募集前}件）`);
+  console.log(
+    `\n✅ 合計: ${result.length}件（募集中 ${statusCounts.募集中}件 / 募集予定 ${statusCounts.募集前}件）`,
+  );
 
   return result;
 }
@@ -104,27 +111,27 @@ export async function searchAllSources(): Promise<Grant[]> {
 export function dedupeAcrossSources(grants: Grant[]): Grant[] {
   const normalize = (name: string): string =>
     name
-      .replace(/[【】「」『』（）()《》\s　・＆&×／/]/g, '')
-      .replace(/こども/g, '子ども')
-      .replace(/20\d{2}\s*年度?|令和\d+\s*年度?/g, '')
-      .replace(/第\s*\d+\s*[回期次]/g, '')
-      .replace(/募集|公募/g, '')
-      .replace(/[-‐－―…]+$/g, '');
+      .replace(/[【】「」『』（）()《》\s　・＆&×／/]/g, "")
+      .replace(/こども/g, "子ども")
+      .replace(/20\d{2}\s*年度?|令和\d+\s*年度?/g, "")
+      .replace(/第\s*\d+\s*[回期次]/g, "")
+      .replace(/募集|公募/g, "")
+      .replace(/[-‐－―…]+$/g, "");
 
   // 情報の充実度（大きいほど優先して残す）
   const score = (g: Grant): number =>
-    (g.status === '募集中' ? 100 : 0) +
-    (g.expectedPeriod.includes('発表済み') ? 50 : 0) +
-    (g.expectedPeriod.includes('昨年実績') ? 20 : 0) +
-    (g.source === 'known' ? 15 : 0) +
+    (g.status === "募集中" ? 100 : 0) +
+    (g.expectedPeriod.includes("発表済み") ? 50 : 0) +
+    (g.expectedPeriod.includes("昨年実績") ? 20 : 0) +
+    (g.source === "known" ? 15 : 0) +
     (g.targetProjects ? 10 : 0) +
-    (g.grantAmount !== '要確認' ? 5 : 0);
+    (g.grantAmount !== "要確認" ? 5 : 0);
 
   const kept: { grant: Grant; norm: string }[] = [];
 
   for (const grant of grants.slice().sort((a, b) => score(b) - score(a))) {
     const norm = normalize(grant.name);
-    const isDup = kept.some(k => {
+    const isDup = kept.some((k) => {
       const [a, b] = [k.norm, norm];
       const shorter = a.length <= b.length ? a : b;
       // 片方がもう片方を含む、または13文字以上の共通部分がある場合は同一助成金とみなす
@@ -134,7 +141,7 @@ export function dedupeAcrossSources(grants: Grant[]): Grant[] {
     if (!isDup) kept.push({ grant, norm });
   }
 
-  return kept.map(k => k.grant);
+  return kept.map((k) => k.grant);
 }
 
 /** 2つの文字列の最長共通部分文字列の長さ */
