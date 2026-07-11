@@ -177,7 +177,7 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
   );
   for (const g of sections.open) {
     lines.push(
-      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${g.targetProjects || "要確認"} | ${g.grantAmount || "要確認"} | ${g.applicationDeadline} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} |`,
+      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${cellText(g.targetProjects || "要確認")} | ${g.grantAmount || "要確認"} | ${g.applicationDeadline} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} |`,
     );
   }
   lines.push("");
@@ -259,6 +259,15 @@ function mdName(g: Grant): string {
   return g.url ? `[${g.name}](${g.url})` : g.name;
 }
 
+/**
+ * 表のセルに入れる「対象事業」の保険（160字で切る）。
+ * AI読み取り済みの行は短く要約されているが、ページが読めなかった行には
+ * スクレイパーの生テキストが残るため、表が崩れるほど長い場合に備える。
+ */
+function cellText(text: string): string {
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
+}
+
 /** HTMLレポート生成 */
 function generateHtmlReport(sections: Sections, timestamp: string): void {
   const total =
@@ -326,7 +335,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${htmlName(g)}</td>
           <td>${escapeHtml(g.organization)}</td>
           <td><span class="region-tag">${escapeHtml(g.region)}</span></td>
-          <td>${escapeHtml(g.targetProjects || "要確認")}</td>
+          <td>${escapeHtml(cellText(g.targetProjects || "要確認"))}</td>
           <td>${escapeHtml(g.grantAmount || "要確認")}</td>
           <td class="deadline">${escapeHtml(g.applicationDeadline)}</td>
           <td>${formatEligibility(g.personnelCosts)}</td>

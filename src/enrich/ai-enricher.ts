@@ -69,14 +69,19 @@ const EXTRACTION_SCHEMA = {
       enum: ["可能", "対象外", "要確認"],
       description: "この団体がこの助成金に応募できるか",
     },
-    reason: { type: "string", description: "応募可否の判断理由（1文）" },
+    reason: {
+      type: "string",
+      description: "応募可否の判断理由（40字以内・1文）",
+    },
     targetOrganizations: {
       type: "string",
-      description: "応募できる団体の条件。ページに記載がなければ「不明」",
+      description:
+        "応募できる団体の条件の要点だけ（60字以内。例:「愛知県内の子ども食堂運営団体・法人格不問」）。ページに記載がなければ「不明」",
     },
     grantAmount: {
       type: "string",
-      description: "助成額（上限など）。記載がなければ「不明」",
+      description:
+        "助成額（上限など・50字以内）。資金でなく物品支給（食材・ギフトコード・商品券・物品寄贈等）の場合は「物品：内容」の形で書く。資金と物品の両方なら「◯万円＋物品：内容」。記載がなければ「不明」",
     },
     grantPeriod: {
       type: "string",
@@ -120,7 +125,11 @@ ${NPO_PROFILE}
   - 被災地支援・災害復興支援に限定された助成 →「対象外」
   - 活動分野が明らかに無関係（環境保全のみ、芸術のみ等）→「対象外」
   - 判断材料が不足している場合 →「要確認」（安易に対象外にしない）
-- 経費（人件費・謝金・家賃）は、対象経費・使途の記載から判断。記載がなければ「不明」。`;
+- 経費（人件費・謝金・家賃）は、対象経費・使途の記載から判断。記載がなければ「不明」。
+- 抽出結果はレポートの表のセルに入る。**長い引用ではなく要点の要約**にすること。
+  文字数上限（summary 40字・targetOrganizations 60字・reason 40字・grantAmount 50字）を守る。
+- 助成が資金ではなく物品（食材・ギフトコード・商品券・物品寄贈等）の場合、
+  grantAmount は必ず「物品：」で始める（例:「物品：フルーツ5〜7万円相当」）。`;
 
 /** AIクライアント（キー未設定なら null＝フォールバックモード） */
 function getClient(): Anthropic | null {
@@ -258,6 +267,11 @@ async function extractWithAI(
   return JSON.parse(textBlock.text) as ExtractionResult;
 }
 
+/** AIが文字数上限を守らなかったときの保険（上限で切って「…」を付ける） */
+function clamp(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 /** 抽出結果を Grant に反映（既に良い値がある項目は上書きしない） */
 function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
   const isEmpty = (v: string) =>
@@ -267,11 +281,11 @@ function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
 
   // 対象団体＋要約を「対象事業」欄に表示（応募可否の判断材料が一目で分かるように）
   const targetInfo = [
-    ex.summary && ex.summary !== "不明" ? ex.summary : "",
+    ex.summary && ex.summary !== "不明" ? clamp(ex.summary, 40) : "",
     ex.targetOrganizations && ex.targetOrganizations !== "不明"
-      ? `【対象】${ex.targetOrganizations}`
+      ? `【対象】${clamp(ex.targetOrganizations, 60)}`
       : "",
-    ex.applicable === "要確認" ? `【要確認】${ex.reason}` : "",
+    ex.applicable === "要確認" ? `【要確認】${clamp(ex.reason, 40)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -279,7 +293,7 @@ function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
   return {
     ...grant,
     targetProjects: targetInfo || grant.targetProjects,
-    grantAmount: pick(grant.grantAmount, ex.grantAmount),
+    grantAmount: pick(grant.grantAmount, clamp(ex.grantAmount, 60)),
     grantPeriod: pick(grant.grantPeriod, ex.grantPeriod),
     applicationDeadline: pick(
       grant.applicationDeadline,
