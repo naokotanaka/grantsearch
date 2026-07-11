@@ -74,15 +74,20 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
    - `Grant.id` で重複除去後、`dedupeAcrossSources()` が**情報源をまたいだ同一助成金**
      （正規化名の包含・13文字以上の共通部分）を畳み、情報の充実した方を残します。
    - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外し、
-     最後に **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページを
-     読んで詳細情報を充填します（下記「AIエンリッチメント」参照）。
-2. **`generateAllReports(grants?)`**（`src/reports/report-generator.ts`）は
-   Markdown・HTML（`grants-report-YYYY-MM-DD.{md,html}`）・コンソール要約を
+     **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページ＋
+     リンクされた募集要項PDF（最大2件）を読んで詳細情報を充填します
+     （下記「AIエンリッチメント」参照）。
+   - **最後に、確定した最終リストをDBへ再upsertし、リストに入らなかった行を
+     `hidden=1` にします。DBが正本**で、レポートは常にDB（`hidden=0`）から生成されます。
+2. **`generateAllReports()`**（`src/reports/report-generator.ts`）は
+   DB（`getVisibleGrants`）から読んで Markdown・HTML
+   （`grants-report-YYYY-MM-DD.{md,html}`）・コンソール要約を
    **状態別の4部構成**で出力します：
    - 🟢 **今募集中**（締切昇順）／🟡 **募集予定・例年この時期**（次に来る月順、
-     昨年実績を表示）／🔎 **新着・発見**（News発掘、新しい順）／⚪ **要確認**。
-   - `募集終了` は表示しません。`grants` を省略すると DB から全件を読み込むため、
-     `npm run report` は再スクレイピングなしで動作します。
+     12ヶ月の帯で募集月・助成期間・今月を表示）／🔎 **新着・発見**（News発掘＋
+     採択報告からの発掘、新しい順）／⚪ **要確認**。
+   - `募集終了` と `hidden=1` は表示しません。DBから読むため
+     `npm run report` は再スクレイピングなしで動作し、メモ保存後の再生成も同一経路です。
 3. **`generate-pages.ts`** は単独スクリプトです（`index.ts` からは import されず、
    `node dist/generate-pages.js` として実行）。`output/` を新しい `pages/` ディレクトリへ
    コピーし、最新の HTML レポートを `pages/index.html` にして GitHub Pages 用に整えます。
@@ -121,7 +126,9 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   必ずここを通してください。
 - `src/server.ts` — 依存ライブラリ不要の `http` ダッシュボード。`GET /`（操作パネル）、
   `POST /api/search`（検索をバックグラウンド開始、即応答）、`GET /api/status`
-  （実行状態。フロントが5秒間隔でポーリング）、`GET /api/report`（最新 HTML レポート配信）。
+  （実行状態。フロントが5秒間隔でポーリング）、`GET /api/report`（最新 HTML レポート配信）、
+  `POST /api/memo`（メモ保存→レポート再生成）、`POST /api/manual-url`
+  （募集要項URL登録→その場でAI読み取り→レポート再生成。レポートHTML内の✏/📎ボタンから呼ばれる）。
   HTML 内の URL は**相対パス**（nginx が `/grantsearch/` を除去して転送するため。
   絶対パス `/api/...` に戻すと本番で壊れます）。既定バインドは `127.0.0.1`
   （gate 素通り防止。`HOST` で変更可）。
@@ -133,7 +140,13 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 `Grant`（`src/models/grant.ts`）は全体で共有される唯一のレコード型です。フィールド：
 `id`、`name`、`organization`、`region`、`targetProjects`、`grantAmount`、
 `grantPeriod`、`applicationDeadline`、`expectedPeriod`、`personnelCosts`、
-`honorarium`、`rent`、`status`、`url`、`source`、`lastUpdated`。
+`honorarium`、`rent`、`benefitType`、`status`、`url`、`source`、`lastUpdated`、
+`memo`、`manualUrl`。
+
+**`memo`（人間のメモ）と `manualUrl`（人間が登録した募集要項URL）は人間の入力**です。
+`upsertGrant` の ON CONFLICT 更新対象から意図的に外してあり、再検索・AI読み取りで
+消えません。システム側のコードでこの2つを書き換えないこと（専用の `updateMemo` /
+`updateManualUrl` だけが書き換える）。
 
 `expectedPeriod` は「例年の募集時期」（例:「例年6〜7月頃（昨年実績: 2025/6/1〜7/9）」）で、
 `募集前`（＝🟡募集予定）のときにレポートへ表示されます。
@@ -142,6 +155,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 
 - `Region`：`'全国' | '愛知県' | '長久手市'`
 - `Eligibility`（人件費／謝金／家賃）：`'可' | '不可' | '要確認' | '不明'`
+- `BenefitType`（種別）：`'資金' | '物品' | '資金＋物品' | 'その他' | '不明'`
+  - 資金以外はレポートの助成額欄にバッジ（【物品】等）が付く
 - `GrantStatus`：`'募集中' | '募集前' | '募集終了' | '不明'`
   - `募集中`＝締切確認済みで今応募できる／`募集前`＝昨年度実績あり・新年度未発表
     （例年時期を表示）／`募集終了`＝レポート非表示／`不明`＝要確認として表示
@@ -189,8 +204,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   （`GrantSearch/1.0 ...`）と 30 秒のタイムアウトを送ります。ソースサイトへ過度な負荷を
   かけないよう配慮を維持してください。
 - **依存関係**（意図的に最小限）：`axios`、`cheerio`、`better-sqlite3`、`node-cron`、
-  `dayjs`、`@anthropic-ai/sdk`（AIエンリッチメント用）。Web サーバは Node の
-  `http` モジュールのみを使用（Express なし）。
+  `dayjs`、`@anthropic-ai/sdk`（AIエンリッチメント用）、`pdf-parse`（募集要項PDFの
+  テキスト抽出用）。Web サーバは Node の `http` モジュールのみを使用（Express なし）。
 
 ## 新しいスクレイパーの追加手順
 

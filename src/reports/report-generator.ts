@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import dayjs from "dayjs";
 import { Grant } from "../models/grant";
-import { getDatabase, getAllGrants } from "../models/database";
+import { getDatabase, getVisibleGrants } from "../models/database";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 
@@ -51,9 +51,9 @@ function categorize(grants: Grant[]): Sections {
   // 募集予定: 「次に来る月」が近い順（今月起点）
   const currentMonth = new Date().getMonth() + 1;
   const monthsAway = (g: Grant): number => {
-    const m = g.expectedPeriod.match(/例年\s*(\d{1,2})月/);
-    if (!m) return 99;
-    return (parseInt(m[1], 10) - currentMonth + 12) % 12;
+    const months = parseRecruitMonths(g.expectedPeriod);
+    if (months.size === 0) return 99;
+    return Math.min(...Array.from(months, (m) => (m - currentMonth + 12) % 12));
   };
   upcoming.sort((a, b) => monthsAway(a) - monthsAway(b));
 
@@ -61,6 +61,65 @@ function categorize(grants: Grant[]): Sections {
   discovered.sort((a, b) => (a.grantPeriod < b.grantPeriod ? 1 : -1));
 
   return { open, upcoming, discovered, unknown };
+}
+
+/** 開始月〜終了月（年またぎ対応）を Set に展開する */
+function addMonthRange(months: Set<number>, start: number, end: number): void {
+  if (start < 1 || start > 12 || end < 1 || end > 12) return;
+  let m = start;
+  for (let i = 0; i < 12; i++) {
+    months.add(m);
+    if (m === end) break;
+    m = (m % 12) + 1;
+  }
+}
+
+/**
+ * 「例年の募集時期」テキストから募集月の集合を取り出す。
+ * 対応形式: 「例年7月〜8月頃」（12月〜1月の年またぎ可）／「例年6月頃」／
+ * 「春募集: 4月頃 / 秋募集: 10月頃」（複数記述）／「夏期・冬期」等の季節語。
+ * 「（昨年実績: ...）」より後ろの具体日付は見ない。
+ */
+function parseRecruitMonths(text: string): Set<number> {
+  const months = new Set<number>();
+  if (!text) return months;
+  const head = text.split(/[（(]昨年実績/)[0];
+
+  // 範囲（X月〜Y月）
+  for (const m of head.matchAll(
+    /(\d{1,2})\s*月\s*[〜～~‐－-]\s*(\d{1,2})\s*月/g,
+  )) {
+    addMonthRange(months, parseInt(m[1], 10), parseInt(m[2], 10));
+  }
+  // 単独の月（範囲の端も含まれるが Set なので問題ない）
+  for (const m of head.matchAll(/(\d{1,2})\s*月/g)) {
+    const v = parseInt(m[1], 10);
+    if (v >= 1 && v <= 12) months.add(v);
+  }
+  // 季節語（月の記載がないときの補助）
+  if (months.size === 0) {
+    if (/春/.test(head)) addMonthRange(months, 3, 5);
+    if (/夏/.test(head)) addMonthRange(months, 6, 8);
+    if (/秋/.test(head)) addMonthRange(months, 9, 11);
+    if (/冬/.test(head)) addMonthRange(months, 12, 2);
+  }
+  return months;
+}
+
+/**
+ * 「助成期間」テキストから期間の月集合を取り出す。
+ * 「4月1日〜翌年3月31日」「2026年4月～2027年3月」のような月が読める形式のみ対応。
+ * 「1年間」「当該年度」などは null（帯を出さない）。
+ */
+function parseGrantPeriodMonths(text: string): Set<number> | null {
+  if (!text) return null;
+  const m = text.match(
+    /(\d{1,2})\s*月(?:\s*\d{1,2}\s*日)?\s*[〜～~‐－-]\s*(?:翌年)?(?:\d{4}\s*年)?\s*(\d{1,2})\s*月/,
+  );
+  if (!m) return null;
+  const months = new Set<number>();
+  addMonthRange(months, parseInt(m[1], 10), parseInt(m[2], 10));
+  return months.size > 0 ? months : null;
 }
 
 /** 文字列中の最後の日付（＝締切側）を Date にする */
@@ -87,10 +146,14 @@ function parseLastDate(text: string): Date | null {
   return null;
 }
 
-/** レポートを全形式で生成 */
-export function generateAllReports(grants?: Grant[]): void {
+/**
+ * レポートを全形式で生成する。
+ * データは常にDB（hidden=0 の行）から読む。検索直後・メモ保存後・
+ * `npm run report` のどの経路でも同じ内容になる（DBが正本）。
+ */
+export function generateAllReports(): void {
   const db = getDatabase();
-  const data = grants ?? getAllGrants(db);
+  const data = getVisibleGrants(db);
   db.close();
 
   if (data.length === 0) {
@@ -170,14 +233,14 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
   lines.push("締切が近い順に並んでいます。");
   lines.push("");
   lines.push(
-    "| 助成金名 | 助成元 | 地域 | 対象事業 | 助成額 | 締切 | 人件費 | 謝金 | 家賃 |",
+    "| 助成金名 | 助成元 | 地域 | 対象事業 | 助成額 | 締切 | 人件費 | 謝金 | 家賃 | メモ |",
   );
   lines.push(
-    "|---------|--------|------|---------|--------|------|--------|------|------|",
+    "|---------|--------|------|---------|--------|------|--------|------|------|------|",
   );
   for (const g of sections.open) {
     lines.push(
-      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${cellText(g.targetProjects || "要確認")} | ${g.grantAmount || "要確認"} | ${g.applicationDeadline} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} |`,
+      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${cellText(g.targetProjects || "要確認")} | ${mdAmount(g)} | ${g.applicationDeadline} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} | ${g.memo} |`,
     );
   }
   lines.push("");
@@ -190,14 +253,14 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
   );
   lines.push("");
   lines.push(
-    "| 助成金名 | 助成元 | 地域 | 例年の募集時期 | 助成額 | 人件費 | 謝金 | 家賃 |",
+    "| 助成金名 | 助成元 | 地域 | 例年の募集時期 | 助成額 | 人件費 | 謝金 | 家賃 | メモ |",
   );
   lines.push(
-    "|---------|--------|------|--------------|--------|--------|------|------|",
+    "|---------|--------|------|--------------|--------|--------|------|------|------|",
   );
   for (const g of sections.upcoming) {
     lines.push(
-      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${g.expectedPeriod || "要確認"} | ${g.grantAmount || "要確認"} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} |`,
+      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${g.expectedPeriod || "要確認"} | ${mdAmount(g)} | ${g.personnelCosts} | ${g.honorarium} | ${g.rent} | ${g.memo} |`,
     );
   }
   lines.push("");
@@ -209,11 +272,11 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
     "ニュース・ブログ・プレスリリースから自動発見した助成金情報の候補です。内容はリンク先でご確認ください。",
   );
   lines.push("");
-  lines.push("| 発見日 | タイトル | 配信元 | 締切 |");
-  lines.push("|--------|---------|--------|------|");
+  lines.push("| 発見日 | タイトル | 配信元 | 締切 | メモ |");
+  lines.push("|--------|---------|--------|------|------|");
   for (const g of sections.discovered) {
     lines.push(
-      `| ${g.grantPeriod} | ${mdName(g)} | ${g.organization} | ${g.applicationDeadline} |`,
+      `| ${g.grantPeriod} | ${mdName(g)} | ${g.organization} | ${g.applicationDeadline} | ${g.memo} |`,
     );
   }
   lines.push("");
@@ -225,11 +288,11 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
     "募集時期・状態を自動で読み取れなかったものです。リンク先でご確認ください。",
   );
   lines.push("");
-  lines.push("| 助成金名 | 助成元 | 地域 | 締切・時期 |");
-  lines.push("|---------|--------|------|-----------|");
+  lines.push("| 助成金名 | 助成元 | 地域 | 締切・時期 | メモ |");
+  lines.push("|---------|--------|------|-----------|------|");
   for (const g of sections.unknown) {
     lines.push(
-      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${g.applicationDeadline} |`,
+      `| ${mdName(g)} | ${g.organization} | ${g.region} | ${g.applicationDeadline} | ${g.memo} |`,
     );
   }
   lines.push("");
@@ -257,6 +320,14 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
 
 function mdName(g: Grant): string {
   return g.url ? `[${g.name}](${g.url})` : g.name;
+}
+
+/** 助成額（Markdown用）。資金以外は種別を【】で前置する */
+function mdAmount(g: Grant): string {
+  const amount = g.grantAmount || "要確認";
+  return g.benefitType === "資金" || g.benefitType === "不明"
+    ? amount
+    : `【${g.benefitType}】${amount}`;
 }
 
 /**
@@ -306,6 +377,18 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     .unknown { color: #999; }
     .deadline { font-weight: bold; color: #c0392b; }
     .region-tag { background: #eef2f7; border-radius: 4px; padding: 2px 6px; font-size: 0.85em; white-space: nowrap; }
+    .type-badge { background: #8e44ad; color: white; border-radius: 4px; padding: 1px 6px; font-size: 0.85em; margin-right: 4px; white-space: nowrap; display: inline-block; }
+    .month-cell { min-width: 190px; }
+    .month-strip { display: flex; gap: 1px; margin-bottom: 4px; }
+    .month-strip .m { flex: 1; min-width: 13px; text-align: center; font-size: 0.72em; color: #aaa; background: #f0f0f0; border-radius: 2px; padding: 2px 0; }
+    .month-strip .m-recruit { background: #f39c12; color: white; font-weight: bold; }
+    .month-strip .m-period { box-shadow: inset 0 -3px 0 #27ae60; }
+    .month-strip .m-now { outline: 2px solid #c0392b; outline-offset: -1px; }
+    .strip-note { font-size: 0.85em; color: #888; }
+    .memo-cell { min-width: 140px; }
+    .memo-text { white-space: pre-wrap; }
+    .memo-cell button { border: 1px solid #ddd; background: #fafafa; border-radius: 4px; cursor: pointer; padding: 2px 6px; margin-left: 2px; font-size: 1em; }
+    .memo-cell button:hover { background: #eef2f7; }
     .footer { text-align: center; color: #999; font-size: 0.85em; margin-top: 30px; padding: 20px; }
     @media (max-width: 768px) {
       table { font-size: 0.75em; }
@@ -327,7 +410,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     <h2 class="sec-open">🟢 今募集中 <span style="font-weight:normal">(${sections.open.length}件)</span></h2>
     <p class="sec-note">締切が近い順に並んでいます。</p>
     <table>
-      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>対象事業</th><th>助成額</th><th>締切</th><th>人件費</th><th>謝金</th><th>家賃</th></tr></thead>
+      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>対象事業</th><th>助成額</th><th>締切</th><th>人件費</th><th>謝金</th><th>家賃</th><th>メモ</th></tr></thead>
       <tbody>
 `;
   for (const g of sections.open) {
@@ -336,11 +419,12 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${escapeHtml(g.organization)}</td>
           <td><span class="region-tag">${escapeHtml(g.region)}</span></td>
           <td>${escapeHtml(cellText(g.targetProjects || "要確認"))}</td>
-          <td>${escapeHtml(g.grantAmount || "要確認")}</td>
+          <td>${htmlAmount(g)}</td>
           <td class="deadline">${escapeHtml(g.applicationDeadline)}</td>
           <td>${formatEligibility(g.personnelCosts)}</td>
           <td>${formatEligibility(g.honorarium)}</td>
           <td>${formatEligibility(g.rent)}</td>
+          ${memoCell(g)}
         </tr>\n`;
   }
   html += `      </tbody>
@@ -352,7 +436,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     <h2 class="sec-upcoming">🟡 募集予定・例年この時期 <span style="font-weight:normal">(${sections.upcoming.length}件)</span></h2>
     <p class="sec-note">昨年度までに募集実績がある助成金です。発表前から準備できるよう、次に募集が来そうな順に並んでいます。発表を検知すると自動で「今募集中」へ移動します。</p>
     <table>
-      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>例年の募集時期</th><th>助成額</th><th>人件費</th><th>謝金</th><th>家賃</th></tr></thead>
+      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>例年の募集時期（■=募集月 / 緑線=助成期間 / 赤枠=今月）</th><th>助成額</th><th>人件費</th><th>謝金</th><th>家賃</th><th>メモ</th></tr></thead>
       <tbody>
 `;
   for (const g of sections.upcoming) {
@@ -360,11 +444,12 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${htmlName(g)}</td>
           <td>${escapeHtml(g.organization)}</td>
           <td><span class="region-tag">${escapeHtml(g.region)}</span></td>
-          <td>${escapeHtml(g.expectedPeriod || "要確認")}</td>
-          <td>${escapeHtml(g.grantAmount || "要確認")}</td>
+          <td class="month-cell">${monthStrip(g)}<span class="strip-note">${escapeHtml(g.expectedPeriod || "要確認")}</span></td>
+          <td>${htmlAmount(g)}</td>
           <td>${formatEligibility(g.personnelCosts)}</td>
           <td>${formatEligibility(g.honorarium)}</td>
           <td>${formatEligibility(g.rent)}</td>
+          ${memoCell(g)}
         </tr>\n`;
   }
   html += `      </tbody>
@@ -376,7 +461,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     <h2 class="sec-discovered">🔎 新着・発見 <span style="font-weight:normal">(${sections.discovered.length}件)</span></h2>
     <p class="sec-note">ニュース・ブログ・プレスリリースから自動発見した助成金情報の候補です。内容はリンク先でご確認ください。</p>
     <table>
-      <thead><tr><th>発見日</th><th>タイトル</th><th>配信元</th><th>締切</th></tr></thead>
+      <thead><tr><th>発見日</th><th>タイトル</th><th>配信元</th><th>締切</th><th>メモ</th></tr></thead>
       <tbody>
 `;
   for (const g of sections.discovered) {
@@ -385,6 +470,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${htmlName(g)}</td>
           <td>${escapeHtml(g.organization)}</td>
           <td>${escapeHtml(g.applicationDeadline)}</td>
+          ${memoCell(g)}
         </tr>\n`;
   }
   html += `      </tbody>
@@ -396,7 +482,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     <h2 class="sec-unknown">⚪ 要確認 <span style="font-weight:normal">(${sections.unknown.length}件)</span></h2>
     <p class="sec-note">募集時期・状態を自動で読み取れなかったものです。リンク先でご確認ください。</p>
     <table>
-      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>締切・時期</th></tr></thead>
+      <thead><tr><th>助成金名</th><th>助成元</th><th>地域</th><th>締切・時期</th><th>メモ</th></tr></thead>
       <tbody>
 `;
   for (const g of sections.unknown) {
@@ -405,6 +491,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${escapeHtml(g.organization)}</td>
           <td><span class="region-tag">${escapeHtml(g.region)}</span></td>
           <td>${escapeHtml(g.applicationDeadline)}</td>
+          ${memoCell(g)}
         </tr>\n`;
   }
   html += `      </tbody>
@@ -412,10 +499,61 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
 
     <div class="footer">
       <p>凡例: 🟢今応募できる ／ 🟡発表待ち（例年時期を表示） ／ 🔎ウェブから自動発見（要確認） ／ ⚪状態不明</p>
+      <p>メモ欄の ✏ で調べたことを書き残せます（再検索しても消えません）。📎 で募集要項のURL（PDF可）を登録すると、AIが読み取って詳細を埋めます。</p>
       <p>このレポートは自動収集した情報に基づいています。正確な情報は各助成金の公式サイトでご確認ください。</p>
       <p>生成日時: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}</p>
     </div>
   </div>
+  <script>
+    document.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("button");
+      if (!btn) return;
+      const cell = btn.closest(".memo-cell");
+      if (!cell) return;
+      const id = cell.dataset.id;
+
+      if (btn.classList.contains("memo-btn")) {
+        const current = cell.querySelector(".memo-text").textContent;
+        const memo = prompt("メモ（調べて分かったこと。再検索しても消えません）", current);
+        if (memo === null) return;
+        try {
+          const res = await fetch("memo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, memo }),
+          });
+          if (res.ok) {
+            cell.querySelector(".memo-text").textContent = memo;
+          } else {
+            alert("メモの保存に失敗しました");
+          }
+        } catch {
+          alert("通信に失敗しました（このページはサーバー経由で開いてください）");
+        }
+      }
+
+      if (btn.classList.contains("url-btn")) {
+        const url = prompt("募集要項のURL（PDF可）を入力すると、AIが読み取って締切・経費可否などを埋めます");
+        if (!url) return;
+        btn.textContent = "⏳";
+        btn.disabled = true;
+        try {
+          const res = await fetch("manual-url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, url }),
+          });
+          const data = await res.json().catch(() => ({}));
+          alert(data.message || (res.ok ? "読み取りました" : "失敗しました"));
+          if (res.ok) location.reload();
+        } catch {
+          alert("通信に失敗しました（このページはサーバー経由で開いてください）");
+        }
+        btn.textContent = "📎";
+        btn.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>`;
 
@@ -428,6 +566,41 @@ function htmlName(g: Grant): string {
   return g.url
     ? `<a href="${escapeHtml(g.url)}" target="_blank">${escapeHtml(g.name)}</a>`
     : escapeHtml(g.name);
+}
+
+/** 助成額セル（HTML用）。資金以外は種別バッジを前置する */
+function htmlAmount(g: Grant): string {
+  const badge =
+    g.benefitType === "資金" || g.benefitType === "不明"
+      ? ""
+      : `<span class="type-badge">${escapeHtml(g.benefitType)}</span>`;
+  return `${badge}${escapeHtml(g.grantAmount || "要確認")}`;
+}
+
+/** メモセル（✏=メモ編集・📎=募集要項URL登録。scriptが拾って処理する） */
+function memoCell(g: Grant): string {
+  return `<td class="memo-cell" data-id="${escapeHtml(g.id)}"><span class="memo-text">${escapeHtml(g.memo)}</span> <button type="button" class="memo-btn" title="メモを編集">✏</button><button type="button" class="url-btn" title="募集要項URLを登録してAIに読み取らせる">📎</button></td>`;
+}
+
+/**
+ * 12ヶ月の帯。募集月をオレンジで塗り、助成期間（読めた場合のみ）を緑の下線、
+ * 今月を赤枠で示す。募集月が読み取れない場合は帯を出さない。
+ */
+function monthStrip(g: Grant): string {
+  const recruit = parseRecruitMonths(g.expectedPeriod);
+  if (recruit.size === 0) return "";
+  const period = parseGrantPeriodMonths(g.grantPeriod);
+  const currentMonth = new Date().getMonth() + 1;
+
+  let cells = "";
+  for (let m = 1; m <= 12; m++) {
+    const classes = ["m"];
+    if (recruit.has(m)) classes.push("m-recruit");
+    if (period?.has(m)) classes.push("m-period");
+    if (m === currentMonth) classes.push("m-now");
+    cells += `<span class="${classes.join(" ")}">${m}</span>`;
+  }
+  return `<div class="month-strip">${cells}</div>`;
 }
 
 function formatEligibility(value: string): string {

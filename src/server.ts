@@ -2,11 +2,47 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { getSearchState, startSearch } from "./search-runner";
+import {
+  getDatabase,
+  getGrantById,
+  updateMemo,
+  updateManualUrl,
+  updateGrantDetails,
+} from "./models/database";
+import { generateAllReports } from "./reports/report-generator";
+import { enrichSingleGrant } from "./enrich/ai-enricher";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 // nginx 経由での公開を前提に、既定はループバックのみ待ち受ける
 // （0.0.0.0 だと LAN 内から認証ゲートを素通りして直接アクセスできてしまう）
 const HOST = process.env.HOST ?? "127.0.0.1";
+
+/** リクエストボディをJSONとして読む（上限10KB） */
+function readJsonBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 10 * 1024) {
+        reject(new Error("リクエストが大きすぎます"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("JSONを解析できません"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function sendJson(res: http.ServerResponse, code: number, data: object): void {
+  res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(data));
+}
 
 export function startServer(): void {
   const server = http.createServer(async (req, res) => {
@@ -36,6 +72,97 @@ export function startServer(): void {
       // 検索の実行状態を返す（フロントがポーリングする）
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(getSearchState()));
+    } else if (url.pathname === "/api/memo" && req.method === "POST") {
+      // メモの保存（人間の入力。再検索でも消えない）
+      try {
+        const body = await readJsonBody(req);
+        const id = String(body.id ?? "");
+        const memo = String(body.memo ?? "").slice(0, 500);
+        const db = getDatabase();
+        try {
+          if (!id || !getGrantById(db, id)) {
+            sendJson(res, 400, {
+              status: "error",
+              message: "対象の助成金が見つかりません",
+            });
+            return;
+          }
+          updateMemo(db, id, memo);
+        } finally {
+          db.close();
+        }
+        generateAllReports(); // メモ入りのレポートに作り直す
+        sendJson(res, 200, { status: "ok", message: "メモを保存しました" });
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
+    } else if (url.pathname === "/api/manual-url" && req.method === "POST") {
+      // 募集要項URLの手動登録 → その場でAIが読み取って詳細を埋める
+      try {
+        const body = await readJsonBody(req);
+        const id = String(body.id ?? "");
+        const manualUrl = String(body.url ?? "").trim();
+        if (!/^https?:\/\//.test(manualUrl)) {
+          sendJson(res, 400, {
+            status: "error",
+            message: "http(s) のURLを入力してください",
+          });
+          return;
+        }
+
+        const db = getDatabase();
+        let grant;
+        try {
+          grant = getGrantById(db, id);
+          if (!grant) {
+            sendJson(res, 400, {
+              status: "error",
+              message: "対象の助成金が見つかりません",
+            });
+            return;
+          }
+          updateManualUrl(db, id, manualUrl);
+          grant.manualUrl = manualUrl;
+        } finally {
+          db.close();
+        }
+
+        // AIで読み取り（キー未設定・ページが読めない場合は null）
+        const enriched = await enrichSingleGrant(grant);
+        if (enriched) {
+          const db2 = getDatabase();
+          try {
+            updateGrantDetails(db2, enriched);
+          } finally {
+            db2.close();
+          }
+          generateAllReports();
+          sendJson(res, 200, {
+            status: "ok",
+            message: "URLを登録し、AIが読み取って詳細を更新しました",
+          });
+        } else if (!process.env.ANTHROPIC_API_KEY) {
+          sendJson(res, 200, {
+            status: "ok",
+            message:
+              "URLを登録しました（AIキー未設定のため、読み取りは次回の検索時に行います）",
+          });
+        } else {
+          sendJson(res, 200, {
+            status: "ok",
+            message:
+              "URLを登録しましたが、ページを読み取れませんでした（次回の検索時に再試行します）",
+          });
+        }
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
     } else if (url.pathname === "/api/report" && req.method === "GET") {
       // 最新レポート取得
       const outputDir = path.join(process.cwd(), "output");

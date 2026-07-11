@@ -17,6 +17,15 @@ export type Eligibility = "可" | "不可" | "要確認" | "不明";
  */
 export type GrantStatus = "募集中" | "募集前" | "募集終了" | "不明";
 
+/**
+ * 助成の種別
+ * - 資金: 金銭の助成
+ * - 物品: 食材・ギフトコード・商品券・物品寄贈など現物支給
+ * - 資金＋物品: 両方
+ * - その他: 表彰・人材派遣など上記以外
+ */
+export type BenefitType = "資金" | "物品" | "資金＋物品" | "その他" | "不明";
+
 /** 助成金・補助金の情報 */
 export interface Grant {
   /** 一意なID（ソース名_ハッシュ） */
@@ -58,6 +67,9 @@ export interface Grant {
   /** 家賃に使えるか */
   rent: Eligibility;
 
+  /** 助成の種別（資金/物品など） */
+  benefitType: BenefitType;
+
   /** 募集状態 */
   status: GrantStatus;
 
@@ -69,6 +81,18 @@ export interface Grant {
 
   /** 最終更新日（ISO形式） */
   lastUpdated: string;
+
+  /**
+   * 人間が書いたメモ（調べて分かったこと）。
+   * 再検索・AI読み取りでは一切上書きされない。
+   */
+  memo: string;
+
+  /**
+   * 人間が登録した募集要項のURL（PDF可）。
+   * 設定されていればAI読み取りはこちらを優先して読む。再検索で消えない。
+   */
+  manualUrl: string;
 }
 
 /** スクレイパーの設定 */

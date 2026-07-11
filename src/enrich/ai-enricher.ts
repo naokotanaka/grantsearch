@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import axios from "axios";
 import * as cheerio from "cheerio";
-import { Grant, Eligibility } from "../models/grant";
+import { PDFParse } from "pdf-parse";
+import { Grant, Eligibility, BenefitType } from "../models/grant";
 
 /**
  * 公式ページ読み取りによる詳細情報の充填（AIエンリッチメント）
@@ -29,14 +30,20 @@ const MODEL = process.env.CLAUDE_MODEL ?? "claude-haiku-4-5";
 /** 1回の実行で読み取る公式ページの上限（コスト暴走の防止） */
 const MAX_PAGES = 150;
 
-/** ページ本文をAIに渡す際の最大文字数 */
-const MAX_TEXT_LENGTH = 8000;
+/** AIに渡すテキストの上限（ページ本文＋添付PDFの合計） */
+const PAGE_TEXT_LIMIT = 6000;
+const PDF_TEXT_LIMIT = 3000;
+/** ページからたどって読む募集要項PDFの上限数 */
+const MAX_LINKED_PDFS = 2;
+/** PDFのダウンロード上限（バイト） */
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 interface ExtractionResult {
   applicable: "可能" | "対象外" | "要確認";
   reason: string;
   targetOrganizations: string;
   grantAmount: string;
+  benefitType: BenefitType;
   grantPeriod: string;
   applicationDeadline: string;
   personnelCosts: Eligibility;
@@ -56,6 +63,7 @@ const EXTRACTION_SCHEMA = {
     "reason",
     "targetOrganizations",
     "grantAmount",
+    "benefitType",
     "grantPeriod",
     "applicationDeadline",
     "personnelCosts",
@@ -81,7 +89,13 @@ const EXTRACTION_SCHEMA = {
     grantAmount: {
       type: "string",
       description:
-        "助成額（上限など・50字以内）。資金でなく物品支給（食材・ギフトコード・商品券・物品寄贈等）の場合は「物品：内容」の形で書く。資金と物品の両方なら「◯万円＋物品：内容」。記載がなければ「不明」",
+        "助成の内容・金額（上限など・50字以内）。物品支給なら内容と金額相当を書く（例:「フルーツ5〜7万円相当」）。記載がなければ「不明」",
+    },
+    benefitType: {
+      type: "string",
+      enum: ["資金", "物品", "資金＋物品", "その他", "不明"],
+      description:
+        "助成の種別。金銭=「資金」、食材・ギフトコード・商品券・物品寄贈など現物=「物品」、両方=「資金＋物品」、表彰・人材派遣など=「その他」",
     },
     grantPeriod: {
       type: "string",
@@ -128,8 +142,10 @@ ${NPO_PROFILE}
 - 経費（人件費・謝金・家賃）は、対象経費・使途の記載から判断。記載がなければ「不明」。
 - 抽出結果はレポートの表のセルに入る。**長い引用ではなく要点の要約**にすること。
   文字数上限（summary 40字・targetOrganizations 60字・reason 40字・grantAmount 50字）を守る。
-- 助成が資金ではなく物品（食材・ギフトコード・商品券・物品寄贈等）の場合、
-  grantAmount は必ず「物品：」で始める（例:「物品：フルーツ5〜7万円相当」）。`;
+- benefitType（種別）: 助成が金銭なら「資金」、食材・ギフトコード・商品券・物品寄贈など
+  現物なら「物品」、両方なら「資金＋物品」、表彰・人材派遣などなら「その他」。
+- 本文に【添付PDF】の見出しが付いた部分は、そのページからリンクされた募集要項PDFの
+  内容である。本文より詳しいことが多いので、経費の可否や締切はPDF側も必ず確認する。`;
 
 /** AIクライアント（キー未設定なら null＝フォールバックモード） */
 function getClient(): Anthropic | null {
@@ -147,17 +163,96 @@ const httpClient = axios.create({
   },
 });
 
-/** 公式ページの本文テキストを取得（スクリプト等を除去して圧縮） */
-export async function fetchPageText(url: string): Promise<string | null> {
+/** URLがPDFを指しているか */
+function isPdfUrl(url: string): boolean {
+  return /\.pdf($|[?#])/i.test(url);
+}
+
+/** PDFをダウンロードして本文テキストを抽出する（失敗時は null） */
+async function fetchPdfText(url: string): Promise<string | null> {
+  try {
+    const response = await httpClient.get(url, {
+      responseType: "arraybuffer",
+      maxContentLength: MAX_PDF_BYTES,
+    });
+    const parser = new PDFParse({ data: Buffer.from(response.data) });
+    try {
+      const result = await parser.getText();
+      const text = result.text.replace(/[\s\n\r\t]+/g, " ").trim();
+      return text.length > 100 ? text : null; // 画像だけのPDF等は情報なしとみなす
+    } finally {
+      await parser.destroy();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ページ内から「募集要項らしいPDF」へのリンクを最大 MAX_LINKED_PDFS 件拾う。
+ * 要項系の語を含むリンクを優先し、足りなければ単なるPDFリンクで補う。
+ */
+function findPdfLinks($: cheerio.CheerioAPI, pageUrl: string): string[] {
+  const KEYWORD = /募集要項|実施要領|応募要領|申請要領|要項|要領|募集案内/;
+  const preferred: string[] = [];
+  const others: string[] = [];
+
+  $("a[href]").each((_, el) => {
+    const href = $(el).attr("href") ?? "";
+    if (!isPdfUrl(href)) return;
+    let resolved: string;
+    try {
+      resolved = new URL(href, pageUrl).toString();
+    } catch {
+      return;
+    }
+    const label = `${$(el).text()} ${href}`;
+    (KEYWORD.test(label) ? preferred : others).push(resolved);
+  });
+
+  return [...new Set([...preferred, ...others])].slice(0, MAX_LINKED_PDFS);
+}
+
+/**
+ * 助成金の情報源テキストを取得する。
+ * - PDF URL → PDF本文を抽出
+ * - HTML → ページ本文＋リンクされた募集要項PDF（最大2件）を連結
+ * 短すぎる・読めない場合は null。
+ */
+export async function fetchSourceText(url: string): Promise<string | null> {
+  if (isPdfUrl(url)) {
+    const text = await fetchPdfText(url);
+    return text ? text.slice(0, PAGE_TEXT_LIMIT + PDF_TEXT_LIMIT) : null;
+  }
+
   try {
     const response = await httpClient.get(url, { responseType: "text" });
     const $ = cheerio.load(response.data);
+    const pdfLinks = findPdfLinks($, url);
     $("script, style, nav, footer, header, noscript, iframe").remove();
-    const text = $("body")
+    const pageText = $("body")
       .text()
       .replace(/[\s\n\r\t]+/g, " ")
       .trim();
-    return text.length > 200 ? text.slice(0, MAX_TEXT_LENGTH) : null; // 短すぎるページは情報なしとみなす
+
+    const parts: string[] = [];
+    if (pageText.length > 200) parts.push(pageText.slice(0, PAGE_TEXT_LIMIT));
+
+    // 募集要項PDFの本文を追記（本文より詳しい情報が載っていることが多い）
+    for (const pdfUrl of pdfLinks) {
+      const pdfText = await fetchPdfText(pdfUrl);
+      if (pdfText) {
+        const fileName = decodeURIComponent(
+          pdfUrl.split("/").pop() ?? "募集要項",
+        );
+        parts.push(
+          `【添付PDF: ${fileName}】 ${pdfText.slice(0, PDF_TEXT_LIMIT)}`,
+        );
+      }
+    }
+
+    const combined = parts.join("\n").trim();
+    return combined.length > 200 ? combined : null; // 短すぎるページは情報なしとみなす
   } catch {
     return null;
   }
@@ -165,9 +260,9 @@ export async function fetchPageText(url: string): Promise<string | null> {
 
 /** エンリッチメント対象かどうか（読みに行く価値のあるURLか） */
 function isEnrichable(grant: Grant): boolean {
-  if (!/^https?:\/\//.test(grant.url)) return false;
-  if (/\.pdf($|[?#])/i.test(grant.url)) return false;
-  if (/news\.google\.com/.test(grant.url)) return false; // 転送URLは読めない
+  const url = grant.manualUrl || grant.url;
+  if (!/^https?:\/\//.test(url)) return false;
+  if (/news\.google\.com/.test(url)) return false; // 転送URLは読めない
   return (
     grant.status === "募集中" ||
     grant.status === "募集前" ||
@@ -190,7 +285,7 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
       "\nℹ ANTHROPIC_API_KEY が未設定のため、ルールベースの簡易抽出で公式ページを読み取ります",
     );
     console.log(
-      "  （GitHub の Settings → Secrets and variables → Actions に ANTHROPIC_API_KEY を登録するとAI読み取りが有効になります）",
+      "  （.env に ANTHROPIC_API_KEY を設定するとAI読み取りが有効になります）",
     );
   }
 
@@ -205,7 +300,9 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
     }
     processed++;
 
-    const pageText = await fetchPageText(grant.url);
+    // 人間が募集要項URLを登録していればそちらを優先して読む
+    const sourceUrl = grant.manualUrl || grant.url;
+    const pageText = await fetchSourceText(sourceUrl);
     if (!pageText) {
       result.push(grant); // ページが読めなければそのまま掲載
       continue;
@@ -215,11 +312,16 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
       if (client) {
         const extraction = await extractWithAI(client, grant, pageText);
         if (extraction.applicable === "対象外") {
-          excluded++;
-          console.log(
-            `  ✗ 対象外: ${grant.name.slice(0, 40)}（${extraction.reason.slice(0, 50)}）`,
-          );
-          continue; // 掲載しない
+          if (grant.manualUrl) {
+            // 人間が関係あると判断して登録したものはAIの判断で消さず、要確認に落とす
+            extraction.applicable = "要確認";
+          } else {
+            excluded++;
+            console.log(
+              `  ✗ 対象外: ${grant.name.slice(0, 40)}（${extraction.reason.slice(0, 50)}）`,
+            );
+            continue; // 掲載しない
+          }
         }
         result.push(applyExtraction(grant, extraction));
       } else {
@@ -272,12 +374,24 @@ function clamp(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** 抽出結果を Grant に反映（既に良い値がある項目は上書きしない） */
-function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
+/**
+ * 抽出結果を Grant に反映する。
+ * 通常（overwrite=false）は既に良い値がある項目を上書きしない。
+ * 人間が募集要項URLを登録して読み直すとき（overwrite=true）は、
+ * その要項を正とみなし、AIが読み取れた値で上書きする。
+ * memo / manualUrl にはどちらのモードでも触らない。
+ */
+function applyExtraction(
+  grant: Grant,
+  ex: ExtractionResult,
+  overwrite = false,
+): Grant {
   const isEmpty = (v: string) =>
     !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
   const pick = (current: string, extracted: string) =>
-    isEmpty(current) && !isEmpty(extracted) ? extracted : current;
+    (overwrite || isEmpty(current)) && !isEmpty(extracted)
+      ? extracted
+      : current;
 
   // 対象団体＋要約を「対象事業」欄に表示（応募可否の判断材料が一目で分かるように）
   const targetInfo = [
@@ -300,12 +414,133 @@ function applyExtraction(grant: Grant, ex: ExtractionResult): Grant {
       ex.applicationDeadline,
     ),
     personnelCosts:
+      (overwrite && ex.personnelCosts !== "不明") ||
       grant.personnelCosts === "不明"
         ? ex.personnelCosts
         : grant.personnelCosts,
-    honorarium: grant.honorarium === "不明" ? ex.honorarium : grant.honorarium,
-    rent: grant.rent === "不明" ? ex.rent : grant.rent,
+    honorarium:
+      (overwrite && ex.honorarium !== "不明") || grant.honorarium === "不明"
+        ? ex.honorarium
+        : grant.honorarium,
+    rent:
+      (overwrite && ex.rent !== "不明") || grant.rent === "不明"
+        ? ex.rent
+        : grant.rent,
+    benefitType:
+      (overwrite && ex.benefitType !== "不明") || grant.benefitType === "不明"
+        ? ex.benefitType
+        : grant.benefitType,
   };
+}
+
+/**
+ * 1件だけAIで読み直す（募集要項URLの手動登録時に /api/manual-url から呼ばれる）。
+ * 登録された要項を正とみなし、読み取れた値で既存値を上書きする。
+ * AIキー未設定・ページが読めない場合は null を返す（呼び出し側でメッセージを分ける）。
+ */
+export async function enrichSingleGrant(grant: Grant): Promise<Grant | null> {
+  const client = getClient();
+  if (!client) return null;
+
+  const sourceUrl = grant.manualUrl || grant.url;
+  const pageText = await fetchSourceText(sourceUrl);
+  if (!pageText) return null;
+
+  const extraction = await extractWithAI(client, grant, pageText);
+  if (extraction.applicable === "対象外") {
+    // 人間が登録したものはAIの判断で消さない（要確認に落とすだけ）
+    extraction.applicable = "要確認";
+  }
+  return {
+    ...applyExtraction(grant, extraction, true),
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+/** 採択報告記事のタイトルから抽出した助成金情報 */
+export interface AdoptionExtraction {
+  /** 渡したタイトル配列の添字 */
+  index: number;
+  /** 助成金・基金の名称（抽出できなければ空文字） */
+  grantName: string;
+  /** 助成元の団体名（分からなければ空文字） */
+  organization: string;
+}
+
+const ADOPTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["index", "grantName", "organization"],
+        properties: {
+          index: { type: "number", description: "タイトル一覧の番号" },
+          grantName: {
+            type: "string",
+            description:
+              "記事中の助成金・基金・助成プログラムの名称（例:「休眠預金活用助成」「子ども未来基金」）。タイトルに含まれていなければ空文字",
+          },
+          organization: {
+            type: "string",
+            description: "助成元の団体・財団名。分からなければ空文字",
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+/**
+ * 他団体の採択報告記事のタイトル群から、助成金名と助成元をAIで抽出する。
+ * （「NPO法人〇〇が△△助成に採択されました」→ 助成金名「△△助成」）
+ * AIキー未設定時は正規表現による粗い抽出にフォールバックする。
+ */
+export async function extractGrantNamesFromTitles(
+  titles: string[],
+): Promise<AdoptionExtraction[]> {
+  if (titles.length === 0) return [];
+
+  const client = getClient();
+  if (!client) {
+    // フォールバック: 「〜助成」「〜基金」等で終わる語を切り出す（精度は低い）
+    return titles
+      .map((title, index) => {
+        const m = title.match(
+          /[「『]?([^\s「」『』、。]{2,30}?(?:助成金|助成|基金|ファンド|プログラム))[」』]?/,
+        );
+        return { index, grantName: m ? m[1] : "", organization: "" };
+      })
+      .filter((e) => e.grantName);
+  }
+
+  const numbered = titles.map((t, i) => `${i}: ${t}`).join("\n");
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    system:
+      "あなたは日本のNPOの助成金調査担当です。他団体の採択報告・受贈報告の記事タイトルから、助成金・基金の名称と助成元を抽出します。記事を書いた団体名（採択された側）を助成金名や助成元と混同しないこと。",
+    output_config: {
+      format: { type: "json_schema", schema: ADOPTION_SCHEMA },
+    },
+    messages: [
+      {
+        role: "user",
+        content: `以下は「助成に採択された」旨の記事タイトルの一覧です。それぞれから助成金・基金の名称と助成元を抽出してください。タイトルに助成金名が含まれない場合は grantName を空文字にしてください。\n\n${numbered}`,
+      },
+    ],
+  });
+
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") return [];
+  const parsed = JSON.parse(textBlock.text) as { items: AdoptionExtraction[] };
+  return parsed.items.filter(
+    (e) => e.grantName && e.index >= 0 && e.index < titles.length,
+  );
 }
 
 /** キー未設定時のルールベース抽出（AIより粗いが無料） */

@@ -58,6 +58,9 @@ export abstract class BaseScraper {
       url: partial.url ?? "",
       source: this.sourceName,
       lastUpdated: new Date().toISOString(),
+      benefitType: partial.benefitType ?? "不明",
+      memo: partial.memo ?? "",
+      manualUrl: partial.manualUrl ?? "",
     };
   }
 

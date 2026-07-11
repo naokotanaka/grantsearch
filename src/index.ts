@@ -16,8 +16,8 @@ async function main(): Promise<void> {
       console.log("対象地域: 全国 / 愛知県 / 長久手市\n");
 
       try {
-        const grants = await searchAllSources();
-        generateAllReports(grants);
+        await searchAllSources();
+        generateAllReports();
       } catch (error) {
         console.error("検索中にエラーが発生しました:", error);
         process.exit(1);

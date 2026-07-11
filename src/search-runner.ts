@@ -47,7 +47,7 @@ export function startSearch(trigger: string): boolean {
   void (async () => {
     try {
       const grants = await searchAllSources();
-      generateAllReports(grants);
+      generateAllReports();
       state.last = {
         finishedAt: new Date().toISOString(),
         status: "完了",

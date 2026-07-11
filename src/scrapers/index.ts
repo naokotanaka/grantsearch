@@ -9,7 +9,13 @@ import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { getKnownGrants } from "./known-grants";
 import { checkKnownGrants } from "./known-grants-checker";
 import { Grant, EXCLUDE_KEYWORDS } from "../models/grant";
-import { getDatabase, upsertGrants, logSearch } from "../models/database";
+import {
+  getDatabase,
+  upsertGrants,
+  logSearch,
+  getAllGrants,
+  hideGrantsNotIn,
+} from "../models/database";
 import { enrichGrants } from "../enrich/ai-enricher";
 
 /** 全スクレイパーの一覧 */
@@ -69,8 +75,6 @@ export async function searchAllSources(): Promise<Grant[]> {
     }
   }
 
-  db.close();
-
   // IDで重複を除去
   const uniqueGrants = new Map<string, Grant>();
   for (const grant of allGrants) {
@@ -89,6 +93,17 @@ export async function searchAllSources(): Promise<Grant[]> {
     return !hit;
   });
 
+  // DBに保存済みの人間の入力（メモ・手動登録URL）を取り込む
+  // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）
+  const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
+  for (const g of inScope) {
+    const s = stored.get(g.id);
+    if (s) {
+      g.memo = s.memo;
+      g.manualUrl = s.manualUrl;
+    }
+  }
+
   // 各助成金の公式ページを読み、詳細情報（対象団体・助成額・経費可否）を充填。
   // 応募対象外と判断されたものはここで除外される。
   const result = await enrichGrants(inScope);
@@ -99,6 +114,15 @@ export async function searchAllSources(): Promise<Grant[]> {
   console.log(
     `\n✅ 合計: ${result.length}件（募集中 ${statusCounts.募集中}件 / 募集予定 ${statusCounts.募集前}件）`,
   );
+
+  // 最終リストをDBに反映する（DBが正本。レポートは常にDBから生成する）。
+  // リストに入らなかった行（重複・対象外・古い行）は非表示にする。
+  upsertGrants(db, result);
+  hideGrantsNotIn(
+    db,
+    result.map((g) => g.id),
+  );
+  db.close();
 
   return result;
 }

@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { BaseScraper } from "./base-scraper";
 import { Grant, Region } from "../models/grant";
+import { extractGrantNamesFromTitles } from "../enrich/ai-enricher";
 
 /**
  * Google News RSS 横断検索による助成金発見スクレイパー
@@ -27,6 +28,21 @@ export class NewsDiscoveryScraper extends BaseScraper {
 
   /** 全体の掲載上限（レポートが発見候補で溢れないように） */
   private static readonly MAX_ITEMS = 20;
+
+  /**
+   * 採択報告の検索キーワード。
+   * 他団体の「〇〇助成に採択されました」というブログ・お知らせは、
+   * まだ追跡していない助成金の存在を教えてくれる発掘源になる。
+   */
+  private static readonly ADOPTION_QUERIES = [
+    '"採択されました" 助成 NPO',
+    '"採択" 助成金 子ども食堂',
+    '"助成が決定" NPO 子ども',
+    '"助成金を活用" 子ども食堂',
+  ];
+
+  /** 採択報告由来の掲載上限（通常の発見枠とは別） */
+  private static readonly MAX_ADOPTION_ITEMS = 10;
 
   constructor() {
     super("news", "全国");
@@ -75,7 +91,100 @@ export class NewsDiscoveryScraper extends BaseScraper {
       );
       if (official) grant.url = official;
     }
+
+    // 採択報告からの発掘（失敗しても通常の発見結果は返す）
+    try {
+      const adopted = await this.searchAdoptionReports();
+      result.push(...adopted);
+      if (adopted.length > 0) {
+        console.log(`[News発見] 採択報告から ${adopted.length}件を発掘`);
+      }
+    } catch (error) {
+      console.error(
+        "[News発見] 採択報告の検索に失敗:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     return result;
+  }
+
+  /**
+   * 他団体の採択報告記事を検索し、記事タイトルから助成金名をAIで抽出して
+   * 「発見候補」として返す。既に追跡済みの助成金は後段の名前ベース重複除去
+   * （dedupeAcrossSources）で畳まれるため、新規のものだけがレポートに残る。
+   */
+  private async searchAdoptionReports(): Promise<Grant[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - NewsDiscoveryScraper.MAX_AGE_DAYS);
+
+    // 採択報告らしい記事タイトルを集める
+    const articles = new Map<string, string>(); // title -> link
+    for (const query of NewsDiscoveryScraper.ADOPTION_QUERIES) {
+      try {
+        const url =
+          "https://news.google.com/rss/search?q=" +
+          encodeURIComponent(query) +
+          "&hl=ja&gl=JP&ceid=" +
+          encodeURIComponent("JP:ja");
+        const response = await this.client.get(url, { responseType: "text" });
+        const $ = cheerio.load(response.data, { xmlMode: true });
+        $("item").each((_, elem) => {
+          const $item = $(elem);
+          const rawTitle = this.cleanText($item.find("title").first().text());
+          const link = this.cleanText($item.find("link").first().text());
+          const pubDateText = this.cleanText(
+            $item.find("pubDate").first().text(),
+          );
+          if (!rawTitle || !link) return;
+          const published = pubDateText ? new Date(pubDateText) : null;
+          if (!published || isNaN(published.getTime()) || published < cutoff)
+            return;
+          const title = this.cleanText(rawTitle.replace(/\s*-\s*[^-]+$/, ""));
+          if (!/採択|助成が決定|助成金を活用|助成を受け/.test(title)) return;
+          articles.set(title, link);
+        });
+      } catch {
+        // クエリ単位の失敗はスキップ
+      }
+    }
+
+    if (articles.size === 0) return [];
+
+    // 記事タイトルから助成金名・助成元をAIで抽出
+    const titles = Array.from(articles.keys()).slice(0, 30);
+    const extracted = await extractGrantNamesFromTitles(titles);
+
+    const grants: Grant[] = [];
+    const seen = new Set<string>();
+    for (const e of extracted) {
+      if (grants.length >= NewsDiscoveryScraper.MAX_ADOPTION_ITEMS) break;
+      const title = titles[e.index];
+      const key = e.grantName.replace(/\s/g, "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const grant = this.createGrant({
+        id: this.generateId(e.grantName, "adoption"),
+        name: e.grantName,
+        organization: e.organization || "要確認（記事参照）",
+        targetProjects: `採択報告から発見（記事:「${title.slice(0, 50)}」）。内容はリンク先で要確認`,
+        grantAmount: "要確認",
+        applicationDeadline: "要確認",
+        url: articles.get(title) ?? "",
+        status: "不明",
+      });
+
+      // 記事URLはGoogle Newsの転送URLなので、助成金名で公式サイトを探して差し替える
+      const official = await this.searchOfficialSite(
+        e.grantName,
+        NewsDiscoveryScraper.AGGREGATOR_SITES,
+      );
+      if (official) grant.url = official;
+
+      grants.push(grant);
+    }
+    return grants;
   }
 
   /** RSS（XML）を解析して助成金告知らしき記事を抽出 */
