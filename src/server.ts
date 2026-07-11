@@ -1,72 +1,76 @@
-import http from 'http';
-import { searchAllSources } from './scrapers';
-import { generateAllReports } from './reports/report-generator';
-import fs from 'fs';
-import path from 'path';
+import http from "http";
+import fs from "fs";
+import path from "path";
+import { getSearchState, startSearch } from "./search-runner";
 
-const PORT = parseInt(process.env.PORT ?? '3000', 10);
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+// nginx 経由での公開を前提に、既定はループバックのみ待ち受ける
+// （0.0.0.0 だと LAN 内から認証ゲートを素通りして直接アクセスできてしまう）
+const HOST = process.env.HOST ?? "127.0.0.1";
 
 export function startServer(): void {
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+    const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
-    // CORS対応（スマホからのアクセス用）
-    res.setHeader('Access-Control-Allow-Origin', '*');
-
-    if (url.pathname === '/' && req.method === 'GET') {
+    if (url.pathname === "/" && req.method === "GET") {
       // トップページ（操作パネル）
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(getDashboardHtml());
-    } else if (url.pathname === '/api/search' && req.method === 'POST') {
-      // 検索実行API
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.write(JSON.stringify({ status: 'running', message: '検索を開始しました...' }) + '\n');
-
-      try {
-        const grants = await searchAllSources();
-        generateAllReports(grants);
-        res.end(JSON.stringify({
-          status: 'completed',
-          message: `${grants.length}件の助成金情報を取得しました`,
-          count: grants.length,
-        }));
-      } catch (error) {
-        res.end(JSON.stringify({
-          status: 'error',
-          message: error instanceof Error ? error.message : '不明なエラー',
-        }));
+    } else if (url.pathname === "/api/search" && req.method === "POST") {
+      // 検索開始API（バックグラウンドで実行し、即座に応答を返す）
+      const started = startSearch("ダッシュボード");
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      if (started) {
+        res.end(
+          JSON.stringify({ status: "started", message: "検索を開始しました" }),
+        );
+      } else {
+        res.end(
+          JSON.stringify({
+            status: "running",
+            message: "すでに検索を実行中です",
+          }),
+        );
       }
-    } else if (url.pathname === '/api/report' && req.method === 'GET') {
+    } else if (url.pathname === "/api/status" && req.method === "GET") {
+      // 検索の実行状態を返す（フロントがポーリングする）
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(getSearchState()));
+    } else if (url.pathname === "/api/report" && req.method === "GET") {
       // 最新レポート取得
-      const outputDir = path.join(process.cwd(), 'output');
+      const outputDir = path.join(process.cwd(), "output");
       try {
-        const files = fs.readdirSync(outputDir)
-          .filter(f => f.endsWith('.html'))
+        const files = fs
+          .readdirSync(outputDir)
+          .filter((f) => f.endsWith(".html"))
           .sort()
           .reverse();
 
         if (files.length > 0) {
-          const html = fs.readFileSync(path.join(outputDir, files[0]), 'utf-8');
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          const html = fs.readFileSync(path.join(outputDir, files[0]), "utf-8");
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(html);
         } else {
-          res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end('<h1>レポートがまだありません。先に検索を実行してください。</h1>');
+          res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(
+            "<h1>レポートがまだありません。先に検索を実行してください。</h1>",
+          );
         }
       } catch {
-        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<h1>レポートがまだありません。先に検索を実行してください。</h1>');
+        res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(
+          "<h1>レポートがまだありません。先に検索を実行してください。</h1>",
+        );
       }
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Not Found');
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Not Found");
     }
   });
 
-  server.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, HOST, () => {
     console.log(`\n🌐 助成金検索サーバーが起動しました`);
-    console.log(`   http://localhost:${PORT}`);
-    console.log(`   スマホから同じWiFi内でアクセス: http://<このPCのIPアドレス>:${PORT}`);
+    console.log(`   http://${HOST}:${PORT}`);
     console.log(`   Ctrl+C で停止\n`);
   });
 }
@@ -143,8 +147,8 @@ function getDashboardHtml(): string {
     .status.completed { background: #d4edda; color: #155724; }
     .status.error { background: #f8d7da; color: #721c24; }
     .info {
-      font-size: 0.85em;
-      color: #888;
+      font-size: 0.95em;
+      color: #555;
       line-height: 1.6;
     }
     .spinner {
@@ -171,11 +175,15 @@ function getDashboardHtml(): string {
         助成金を検索する
       </button>
       <div class="status" id="searchStatus"></div>
+      <p class="info" style="margin-top:8px;">
+        検索には数分かかります。開始したら画面を閉じても大丈夫です
+        （毎週月曜9:00にも自動実行されます）。
+      </p>
     </div>
 
     <div class="card">
       <h2>レポートを見る</h2>
-      <a href="/api/report" class="btn btn-success" style="text-align:center; text-decoration:none; display:block;">
+      <a href="api/report" class="btn btn-success" style="text-align:center; text-decoration:none; display:block;">
         最新レポートを表示
       </a>
     </div>
@@ -202,37 +210,71 @@ function getDashboardHtml(): string {
   </div>
 
   <script>
-    async function runSearch() {
-      const btn = document.getElementById('searchBtn');
-      const status = document.getElementById('searchStatus');
+    const btn = document.getElementById('searchBtn');
+    const status = document.getElementById('searchStatus');
+    let pollTimer = null;
 
+    function showRunning() {
       btn.disabled = true;
       btn.textContent = '検索中...';
       status.className = 'status show running';
-      status.innerHTML = '<span class="spinner"></span> 助成金情報を収集しています。しばらくお待ちください...';
+      status.innerHTML = '<span class="spinner"></span> 助成金情報を収集しています。数分かかります...';
+    }
 
+    function showIdle(last) {
+      btn.disabled = false;
+      btn.textContent = '助成金を検索する';
+      if (!last) { status.className = 'status'; return; }
+      const time = new Date(last.finishedAt).toLocaleString('ja-JP');
+      if (last.status === '完了') {
+        status.className = 'status show completed';
+        status.textContent = last.message + '（' + time + '）';
+      } else {
+        status.className = 'status show error';
+        status.textContent = 'エラー: ' + last.message + '（' + time + '）';
+      }
+    }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    async function poll() {
       try {
-        const res = await fetch('/api/search', { method: 'POST' });
-        const text = await res.text();
-        // レスポンスの最後のJSONを取得
-        const lines = text.trim().split('\\n');
-        const data = JSON.parse(lines[lines.length - 1]);
-
-        if (data.status === 'completed') {
-          status.className = 'status show completed';
-          status.textContent = data.message;
+        const res = await fetch('api/status');
+        const state = await res.json();
+        if (state.running) {
+          showRunning();
+          if (!pollTimer) pollTimer = setInterval(poll, 5000);
         } else {
-          status.className = 'status show error';
-          status.textContent = 'エラー: ' + data.message;
+          stopPolling();
+          showIdle(state.last);
         }
       } catch (e) {
+        stopPolling();
+        btn.disabled = false;
+        btn.textContent = '助成金を検索する';
         status.className = 'status show error';
         status.textContent = 'ネットワークエラーが発生しました';
       }
-
-      btn.disabled = false;
-      btn.textContent = '助成金を検索する';
     }
+
+    async function runSearch() {
+      showRunning();
+      try {
+        await fetch('api/search', { method: 'POST' });
+      } catch (e) {
+        status.className = 'status show error';
+        status.textContent = 'ネットワークエラーが発生しました';
+        btn.disabled = false;
+        btn.textContent = '助成金を検索する';
+        return;
+      }
+      if (!pollTimer) pollTimer = setInterval(poll, 5000);
+    }
+
+    // ページを開いたとき、実行中なら途中から状態表示を引き継ぐ
+    poll();
   </script>
 </body>
 </html>`;

@@ -1,45 +1,48 @@
-import { searchAllSources } from './scrapers';
-import { generateAllReports } from './reports/report-generator';
-import { startScheduler } from './scheduler';
-import { startServer } from './server';
+import { searchAllSources } from "./scrapers";
+import { generateAllReports } from "./reports/report-generator";
+import { startScheduler } from "./scheduler";
+import { startServer } from "./server";
 
 async function main(): Promise<void> {
-  const command = process.argv[2] ?? 'search';
+  const command = process.argv[2] ?? "search";
 
   switch (command) {
-    case 'search':
+    case "search":
       // 全ソースから助成金情報を収集してレポート生成
-      console.log('🔎 助成金・補助金の検索を開始します...\n');
-      console.log('対象分野: 子育て支援 / 子ども食堂 / 外国にルーツを持つ人の支援');
-      console.log('対象地域: 全国 / 愛知県 / 長久手市\n');
+      console.log("🔎 助成金・補助金の検索を開始します...\n");
+      console.log(
+        "対象分野: 子育て支援 / 子ども食堂 / 外国にルーツを持つ人の支援",
+      );
+      console.log("対象地域: 全国 / 愛知県 / 長久手市\n");
 
       try {
         const grants = await searchAllSources();
         generateAllReports(grants);
       } catch (error) {
-        console.error('検索中にエラーが発生しました:', error);
+        console.error("検索中にエラーが発生しました:", error);
         process.exit(1);
       }
       break;
 
-    case 'report':
+    case "report":
       // 既存のDBデータからレポートのみ生成
-      console.log('📊 既存データからレポートを生成します...\n');
+      console.log("📊 既存データからレポートを生成します...\n");
       generateAllReports();
       break;
 
-    case 'server':
-      // Webサーバーモード（スマホからアクセス可能）
+    case "server":
+      // Webサーバーモード（週次スケジューラも同時に起動する）
       startServer();
+      startScheduler();
       break;
 
-    case 'schedule':
+    case "schedule":
       // 定期実行モード
       const cronExpr = process.argv[3]; // オプション: カスタムcron式
       startScheduler(cronExpr);
       break;
 
-    case 'help':
+    case "help":
       printHelp();
       break;
 
@@ -65,7 +68,7 @@ function printHelp(): void {
 コマンド:
   search    - Web上の助成金情報を収集し、レポートを生成します
   report    - 前回収集済みのデータからレポートを再生成します
-  server    - Webサーバーを起動します（スマホからブラウザでアクセス）
+  server    - Webサーバーを起動します（週次スケジューラも同時に動きます）
   schedule  - 定期実行モードで起動します（デフォルト: 毎週月曜9:00）
   help      - このヘルプを表示します
 
@@ -89,6 +92,6 @@ function printHelp(): void {
 }
 
 main().catch((error) => {
-  console.error('致命的なエラー:', error);
+  console.error("致命的なエラー:", error);
   process.exit(1);
 });
