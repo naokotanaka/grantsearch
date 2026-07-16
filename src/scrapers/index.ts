@@ -5,6 +5,8 @@ import { NagakuteScraper } from "./nagakute-scraper";
 import { MusubieScraper } from "./musubie-scraper";
 import { WamScraper } from "./wam-scraper";
 import { ShimisenScraper } from "./shimisen-scraper";
+import { AkaihaneScraper } from "./akaihane-scraper";
+import { AkaihaneAichiScraper } from "./akaihane-aichi-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { getKnownGrants } from "./known-grants";
 import { checkKnownGrants, checkGrantsOpening } from "./known-grants-checker";
@@ -27,6 +29,8 @@ function getAllScrapers(): BaseScraper[] {
     new AichiVcScraper(),
     new NagakuteScraper(),
     new ShimisenScraper(),
+    new AkaihaneScraper(),
+    new AkaihaneAichiScraper(),
     new NewsDiscoveryScraper(),
   ];
 }
