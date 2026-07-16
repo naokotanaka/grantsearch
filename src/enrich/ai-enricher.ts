@@ -342,6 +342,7 @@ function buildJudgmentNote(examples?: JudgmentExamples): string {
 export async function enrichGrants(
   grants: Grant[],
   judgmentExamples?: JudgmentExamples,
+  protectedIds?: Set<string>,
 ): Promise<Grant[]> {
   const client = getClient();
   if (client) {
@@ -389,7 +390,8 @@ export async function enrichGrants(
           if (
             grant.manualUrl ||
             grant.humanJudgment === "関係あり" ||
-            grant.source === "known"
+            grant.source === "known" ||
+            protectedIds?.has(grant.id)
           ) {
             // 人間が関係あると判断したもの・定番カタログ（人間が登録）は
             // AIの判断で消さず、要確認に落とす

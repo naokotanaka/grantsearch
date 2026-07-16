@@ -85,8 +85,13 @@ export async function searchAllSources(): Promise<Grant[]> {
     uniqueGrants.set(grant.id, grant);
   }
 
-  // 複数の情報源が同じ助成金を載せていることがあるため、名前ベースでも重複を畳む
-  const deduped = dedupeAcrossSources(Array.from(uniqueGrants.values()));
+  // 複数の情報源が同じ助成金を載せていることがあるため、名前ベースでも重複を畳む。
+  // 定番・「関係あり」が畳まれた場合は、残った代表がAI除外からの保護を引き継ぐ
+  const protectedIds = new Set<string>();
+  const deduped = dedupeAcrossSources(
+    Array.from(uniqueGrants.values()),
+    protectedIds,
+  );
 
   // 活動分野外（被災地・災害支援など）は掲載しない
   const inScope = deduped.filter((g) => {
@@ -154,8 +159,12 @@ export async function searchAllSources(): Promise<Grant[]> {
   };
 
   // 各助成金の公式ページを読み、詳細情報（対象団体・助成額・経費可否）を充填。
-  // 応募対象外と判断されたものはここで除外される。
-  const result = await enrichGrants(withoutDismissed, judgmentExamples);
+  // 応募対象外と判断されたものはここで除外される（保護IDは除外されない）。
+  const result = await enrichGrants(
+    withoutDismissed,
+    judgmentExamples,
+    protectedIds,
+  );
   const statusCounts = {
     募集中: result.filter((g) => g.status === "募集中").length,
     募集前: result.filter((g) => g.status === "募集前").length,
@@ -180,8 +189,18 @@ export async function searchAllSources(): Promise<Grant[]> {
  * 情報源をまたいだ重複の畳み込み。
  * 正規化した名前の包含関係（例:「子どもぬくもり基金」⊂「日本フィランソロピック財団
  * 第4回 子どもぬくもり基金」）で同一助成金とみなし、情報の充実したほうを残す。
+ *
+ * protectedIds を渡すと、畳まれた側に定番カタログ（known）や「関係あり」判定が
+ * 含まれていた場合に、残った代表のIDを追加する（保護の引き継ぎ）。
+ * 代表が保護を引き継がないと、定番助成金でも「別ソースの記事が代表になる→
+ * その記事をAIが誤読して対象外→一族まるごと非表示」が起こる。
  */
-export function dedupeAcrossSources(grants: Grant[]): Grant[] {
+export function dedupeAcrossSources(
+  grants: Grant[],
+  protectedIds?: Set<string>,
+): Grant[] {
+  const isProtected = (g: Grant): boolean =>
+    g.source === "known" || g.humanJudgment === "関係あり";
   const normalize = (name: string): string =>
     name
       .replace(/[【】「」『』（）()《》\s　・＆&×／/]/g, "")
@@ -204,14 +223,20 @@ export function dedupeAcrossSources(grants: Grant[]): Grant[] {
 
   for (const grant of grants.slice().sort((a, b) => score(b) - score(a))) {
     const norm = normalize(grant.name);
-    const isDup = kept.some((k) => {
+    const dupOf = kept.find((k) => {
       const [a, b] = [k.norm, norm];
       const shorter = a.length <= b.length ? a : b;
       // 片方がもう片方を含む、または13文字以上の共通部分がある場合は同一助成金とみなす
       if (shorter.length >= 8 && (a.includes(b) || b.includes(a))) return true;
       return longestCommonSubstring(a, b) >= 13;
     });
-    if (!isDup) kept.push({ grant, norm });
+    if (!dupOf) {
+      kept.push({ grant, norm });
+      if (isProtected(grant)) protectedIds?.add(grant.id);
+    } else if (isProtected(grant)) {
+      // 畳まれる側が定番・関係ありなら、残る代表に保護を引き継ぐ
+      protectedIds?.add(dupOf.grant.id);
+    }
   }
 
   return kept.map((k) => k.grant);
