@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { BaseScraper } from "./base-scraper";
-import { Grant, SEARCH_KEYWORDS } from "../models/grant";
+import { Grant, SEARCH_KEYWORDS, DISCOVERY_KEYWORDS } from "../models/grant";
 
 /**
  * CANPAN 助成制度データベースからのスクレイパー
@@ -19,23 +19,6 @@ export class CanpanScraper extends BaseScraper {
 
   /** 取得する最大ページ数（現在は92件≒5ページ。余裕を持たせる） */
   private static readonly MAX_PAGES = 8;
-
-  /** 関連分野の判定キーワード（SEARCH_KEYWORDS に発掘用の語を追加） */
-  private static readonly EXTRA_KEYWORDS = [
-    "移民",
-    "難民",
-    "ひとり親",
-    "母子",
-    "貧困",
-    "孤立",
-    "食支援",
-    "フードバンク",
-    "食育",
-    "教育支援",
-    "奨学",
-    "子どもの居場所",
-    "こども",
-  ];
 
   constructor() {
     super("canpan", "全国");
@@ -161,7 +144,7 @@ export class CanpanScraper extends BaseScraper {
   }
 
   private isRelevant(text: string): boolean {
-    const keywords = [...SEARCH_KEYWORDS, ...CanpanScraper.EXTRA_KEYWORDS];
+    const keywords = [...SEARCH_KEYWORDS, ...DISCOVERY_KEYWORDS];
     return keywords.some((kw) => text.includes(kw));
   }
 }

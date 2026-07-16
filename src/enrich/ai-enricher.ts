@@ -18,7 +18,7 @@ import { Grant, Eligibility, BenefitType } from "../models/grant";
 
 /** 当団体のプロフィール（応募可否判断のためにAIへ渡す） */
 const NPO_PROFILE = `
-- 愛知県長久手市で活動する非営利団体
+- 愛知県長久手市で活動するNPO法人（法人格あり）
 - 活動分野: 子育て支援、子ども食堂・フードパントリー、外国にルーツを持つ人の支援、児童の居場所づくり、学習支援
 - 被災地支援・災害復興支援は行わない
 - 全国対象・愛知県対象・長久手市対象の助成金に応募できる（他の都道府県・市町村限定は不可）
@@ -84,12 +84,12 @@ const EXTRACTION_SCHEMA = {
     targetOrganizations: {
       type: "string",
       description:
-        "応募できる団体の条件の要点だけ（60字以内。例:「愛知県内の子ども食堂運営団体・法人格不問」）。ページに記載がなければ「不明」",
+        "応募条件のうち絞り込みに効く要点だけ（40字以内。例:「愛知県内の子ども食堂運営団体」「活動実績2年以上」）。「非営利法人・団体」「NPO等」のような当然の条件、「法人格不問」「法人格がなくても可」のような緩和条件は書かない。絞り込み条件がなければ空文字。ページに記載がなければ「不明」",
     },
     grantAmount: {
       type: "string",
       description:
-        "助成の内容・金額（上限など・50字以内）。物品支給なら内容と金額相当を書く（例:「フルーツ5〜7万円相当」）。記載がなければ「不明」",
+        "助成額の上限の数字だけ（例:「10万」「500万」「1億」）。範囲表記は上限側だけ取る（「5〜10万円」→「10万」）。「上限」の語・「円」・下限・「総額」「減額される場合あり」等の語は一切付けない。物品支給のみ内容と金額相当を書く（例:「フルーツ5〜7万円相当」）。記載がなければ「不明」",
     },
     benefitType: {
       type: "string",
@@ -122,7 +122,8 @@ const EXTRACTION_SCHEMA = {
     },
     summary: {
       type: "string",
-      description: "この助成金の内容の一言要約（40字以内）",
+      description:
+        "何への助成かの一言（30字以内。例:「事業運営資金」「学習支援活動への助成」）。金額・締切・対象団体はここに書かない（別の欄がある）",
     },
   },
 } as const;
@@ -143,8 +144,14 @@ ${NPO_PROFILE}
     助成は翌年度また応募できるため、締切切れでも掲載を続ける（応募可否は
     団体・地域・分野だけで判断する）。
 - 経費（人件費・謝金・家賃）は、対象経費・使途の記載から判断。記載がなければ「不明」。
-- 抽出結果はレポートの表のセルに入る。**長い引用ではなく要点の要約**にすること。
-  文字数上限（summary 40字・targetOrganizations 60字・reason 40字・grantAmount 50字）を守る。
+- 抽出結果はレポートの表のセルに入る。**長い引用ではなく要点だけ**にすること。
+  文字数上限（summary 30字・targetOrganizations 40字・reason 40字・grantAmount 30字）を守る。
+- **当然のことは書かない**（レポートの読み手はNPO法人の助成金担当者）：
+  - 「非営利法人・団体が対象」「NPO等が対象」→ NPO向け助成では当然なので書かない
+  - 「法人格不問」「法人格がなくても実績があれば可」→ 依頼元は法人格のあるNPO法人
+    なので無意味。書かない
+  - 「減額される場合あり」「選考により決定」「予算の範囲内で」→ どの助成金でも当然
+    なので書かない。助成額は額面だけ書く
 - benefitType（種別）: 助成が金銭なら「資金」、食材・ギフトコード・商品券・物品寄贈など
   現物なら「物品」、両方なら「資金＋物品」、表彰・人材派遣などなら「その他」。
 - 本文に【添付PDF】の見出しが付いた部分は、そのページからリンクされた募集要項PDFの
@@ -398,19 +405,29 @@ function applyExtraction(
 
   // 対象団体＋要約を「対象事業」欄に表示（応募可否の判断材料が一目で分かるように）
   const targetInfo = [
-    ex.summary && ex.summary !== "不明" ? clamp(ex.summary, 40) : "",
+    ex.summary && ex.summary !== "不明" ? clamp(ex.summary, 30) : "",
     ex.targetOrganizations && ex.targetOrganizations !== "不明"
-      ? `【対象】${clamp(ex.targetOrganizations, 60)}`
+      ? `【対象】${clamp(ex.targetOrganizations, 40)}`
       : "",
     ex.applicable === "要確認" ? `【要確認】${clamp(ex.reason, 40)}` : "",
   ]
     .filter(Boolean)
     .join(" ");
 
+  // 助成額は額面だけの短い表記が正。既存値が注記付きで冗長（25字超）なら、
+  // より短い抽出値で置き換える（過去に長文で保存された行の解消）
+  const amountCandidate = clamp(ex.grantAmount, 30);
+  const grantAmount =
+    !isEmpty(amountCandidate) &&
+    grant.grantAmount.length > 25 &&
+    amountCandidate.length < grant.grantAmount.length
+      ? amountCandidate
+      : pick(grant.grantAmount, amountCandidate);
+
   return {
     ...grant,
     targetProjects: targetInfo || grant.targetProjects,
-    grantAmount: pick(grant.grantAmount, clamp(ex.grantAmount, 60)),
+    grantAmount,
     grantPeriod: pick(grant.grantPeriod, ex.grantPeriod),
     applicationDeadline: pick(
       grant.applicationDeadline,
@@ -526,7 +543,7 @@ export async function extractGrantNamesFromTitles(
     model: MODEL,
     max_tokens: 2048,
     system:
-      "あなたは日本のNPOの助成金調査担当です。他団体の採択報告・受贈報告の記事タイトルから、助成金・基金の名称と助成元を抽出します。記事を書いた団体名（採択された側）を助成金名や助成元と混同しないこと。",
+      "あなたは日本のNPOの助成金調査担当です。他団体の採択報告・活動報告の記事タイトル（「／」の後に本文抜粋が続く場合あり）から、助成金・基金の名称と助成元を抽出します。記事を書いた団体名（助成を受けた側）を助成金名や助成元と混同しないこと。",
     output_config: {
       format: { type: "json_schema", schema: ADOPTION_SCHEMA },
     },

@@ -154,7 +154,7 @@ export abstract class BaseScraper {
   }
 
   /** SNS・検索エンジンなど、公式サイトとして扱わないドメイン */
-  private static readonly NON_OFFICIAL =
+  protected static readonly NON_OFFICIAL =
     /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google/;
 
   /** まとめサイト等、検索フォールバックで公式サイトとして採用しないドメイン */

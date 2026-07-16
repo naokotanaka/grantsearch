@@ -4,14 +4,15 @@ import { Grant, Region } from "../models/grant";
 import { extractGrantNamesFromTitles } from "../enrich/ai-enricher";
 
 /**
- * Google News RSS 横断検索による助成金発見スクレイパー
+ * Web横断検索による助成金発見スクレイパー
  *
- * ニュース記事・ブログ・プレスリリースを横断検索できる公開RSSを使い、
- * 固定の情報源には載らないマイナーな助成金の告知を発掘する。
- * RSSはXML構造が安定しており、HTMLの構造変化に強い。
+ * 2つの検索を使い、固定の情報源には載らないマイナーな助成金を発掘する：
+ * - Google News RSS: ニュース記事・プレスリリースの募集告知＋採択報告
+ * - DuckDuckGo（キー不要）: ブログ・団体サイトの「〇〇助成でイベントを
+ *   開催しました」という活動報告（ニュースに載らない助成金の発掘源）
  *
  * 発見した記事は「候補」であり、内容の確認はリンク先で行う前提
- * （レポートでは専用セクションに新しい順で掲載する）。
+ * （レポートでは🔎セクションに掲載する）。
  */
 export class NewsDiscoveryScraper extends BaseScraper {
   /** 検索キーワード（それぞれ別々にRSS検索する） */
@@ -21,6 +22,9 @@ export class NewsDiscoveryScraper extends BaseScraper {
     "学習支援 助成 募集 団体",
     "外国ルーツ 子ども 助成",
     "フードパントリー 助成 募集",
+    "不登校 居場所 助成 募集",
+    "体験格差 助成 募集",
+    "ひとり親 支援 助成 募集",
   ];
 
   /** 掲載する記事の新しさ（日数） */
@@ -39,6 +43,19 @@ export class NewsDiscoveryScraper extends BaseScraper {
     '"採択" 助成金 子ども食堂',
     '"助成が決定" NPO 子ども',
     '"助成金を活用" 子ども食堂',
+  ];
+
+  /**
+   * 活動報告のWeb検索キーワード（DuckDuckGo・キー不要）。
+   * ニュースに載らないブログ・団体サイトの「〇〇助成でイベントを開催しました」
+   * という報告から、まだ追跡していない助成金を発掘する。
+   */
+  private static readonly WEB_REPORT_QUERIES = [
+    '"助成を受けて" 子ども食堂',
+    '"助成金を活用して" 子ども 開催',
+    '"の助成により" 子ども イベント',
+    '"様から助成" 子ども食堂',
+    '"助成をいただき" 子ども 開催',
   ];
 
   /** 採択報告由来の掲載上限（通常の発見枠とは別） */
@@ -109,17 +126,22 @@ export class NewsDiscoveryScraper extends BaseScraper {
     return result;
   }
 
+  /** 採択報告・活動報告らしい文かどうか（助成金名の抽出に回す価値があるか） */
+  private static readonly REPORT_PATTERN =
+    /採択|助成が決定|助成金を活用|助成を受け|助成により|助成をいただ|から助成|より助成/;
+
   /**
-   * 他団体の採択報告記事を検索し、記事タイトルから助成金名をAIで抽出して
+   * 他団体の採択報告・活動報告を検索し、記事タイトルから助成金名をAIで抽出して
    * 「発見候補」として返す。既に追跡済みの助成金は後段の名前ベース重複除去
    * （dedupeAcrossSources）で畳まれるため、新規のものだけがレポートに残る。
+   * 検索元は Google News RSS（ニュース）と DuckDuckGo（ブログ・団体サイト等のWeb全体）。
    */
   private async searchAdoptionReports(): Promise<Grant[]> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - NewsDiscoveryScraper.MAX_AGE_DAYS);
 
-    // 採択報告らしい記事タイトルを集める
-    const articles = new Map<string, string>(); // title -> link
+    // 採択報告らしい記事タイトルを集める（title -> link）
+    const articles = new Map<string, string>();
     for (const query of NewsDiscoveryScraper.ADOPTION_QUERIES) {
       try {
         const url =
@@ -141,9 +163,25 @@ export class NewsDiscoveryScraper extends BaseScraper {
           if (!published || isNaN(published.getTime()) || published < cutoff)
             return;
           const title = this.cleanText(rawTitle.replace(/\s*-\s*[^-]+$/, ""));
-          if (!/採択|助成が決定|助成金を活用|助成を受け/.test(title)) return;
+          if (!NewsDiscoveryScraper.REPORT_PATTERN.test(title)) return;
           articles.set(title, link);
         });
+      } catch {
+        // クエリ単位の失敗はスキップ
+      }
+    }
+
+    // ブログ・団体サイトの活動報告をWeb検索で集める（日付は取れないため鮮度判定なし。
+    // 古い報告でも「毎年恒例の助成」の発見につながるので候補として扱う）
+    for (const query of NewsDiscoveryScraper.WEB_REPORT_QUERIES) {
+      try {
+        const results = await this.searchWebReports(query);
+        for (const r of results) {
+          // タイトルだけでは助成金名が入らないことが多いので、本文抜粋を添えてAIに渡す
+          const text = r.snippet ? `${r.title} ／ ${r.snippet}` : r.title;
+          if (!NewsDiscoveryScraper.REPORT_PATTERN.test(text)) continue;
+          articles.set(text, r.url);
+        }
       } catch {
         // クエリ単位の失敗はスキップ
       }
@@ -152,7 +190,7 @@ export class NewsDiscoveryScraper extends BaseScraper {
     if (articles.size === 0) return [];
 
     // 記事タイトルから助成金名・助成元をAIで抽出
-    const titles = Array.from(articles.keys()).slice(0, 30);
+    const titles = Array.from(articles.keys()).slice(0, 40);
     const extracted = await extractGrantNamesFromTitles(titles);
 
     const grants: Grant[] = [];
@@ -168,7 +206,7 @@ export class NewsDiscoveryScraper extends BaseScraper {
         id: this.generateId(e.grantName, "adoption"),
         name: e.grantName,
         organization: e.organization || "要確認（記事参照）",
-        targetProjects: `採択報告から発見（記事:「${title.slice(0, 50)}」）。内容はリンク先で要確認`,
+        targetProjects: `採択・活動報告から発見(記事:「${title.slice(0, 50)}」)。内容はリンク先で要確認`,
         grantAmount: "要確認",
         applicationDeadline: "要確認",
         url: articles.get(title) ?? "",
@@ -185,6 +223,46 @@ export class NewsDiscoveryScraper extends BaseScraper {
       grants.push(grant);
     }
     return grants;
+  }
+
+  /**
+   * DuckDuckGo（HTML版・キー不要）でWeb全体を検索し、結果一覧を返す。
+   * ニュースに載らないブログ・団体サイトの活動報告を拾うため、
+   * 除外はSNS・検索エンジンのみ（ブログサービスは発掘源として採用する）。
+   */
+  private async searchWebReports(
+    query: string,
+  ): Promise<{ title: string; url: string; snippet: string }[]> {
+    const response = await this.client.get(
+      "https://html.duckduckgo.com/html/",
+      {
+        params: { q: query, kl: "jp-jp" },
+        responseType: "text",
+      },
+    );
+    const $ = cheerio.load(response.data);
+    const results: { title: string; url: string; snippet: string }[] = [];
+    $(".result").each((_, el) => {
+      const $el = $(el);
+      const $a = $el.find("a.result__a").first();
+      const title = this.cleanText($a.text());
+      let href = $a.attr("href") ?? "";
+      // DDGは /l/?uddg=<エンコード済みURL> 形式のリダイレクトを挟むことがある
+      const redirect = href.match(/uddg=([^&]+)/);
+      if (redirect) href = decodeURIComponent(redirect[1]);
+      if (!title || !/^https?:\/\//.test(href)) return;
+      if (BaseScraper.NON_OFFICIAL.test(href)) return;
+      const snippet = this.cleanText(
+        $el.find(".result__snippet").first().text(),
+      );
+      results.push({ title, url: href, snippet: snippet.slice(0, 150) });
+    });
+    if (results.length === 0) {
+      console.warn(
+        `[News発見] Web検索「${query}」が0件でした（DuckDuckGoの形式変更・一時ブロックの可能性）`,
+      );
+    }
+    return results;
   }
 
   /** RSS（XML）を解析して助成金告知らしき記事を抽出 */

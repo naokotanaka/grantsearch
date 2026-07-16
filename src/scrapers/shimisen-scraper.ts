@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { BaseScraper } from "./base-scraper";
-import { Grant, SEARCH_KEYWORDS } from "../models/grant";
+import { Grant, SEARCH_KEYWORDS, DISCOVERY_KEYWORDS } from "../models/grant";
 
 /**
  * しみせん（京都市市民活動総合センター）助成金情報スクレイパー
@@ -21,24 +21,6 @@ export class ShimisenScraper extends BaseScraper {
   private baseUrl = "https://shimisen-kyoto.org";
 
   private static readonly MAX_PAGES = 4;
-
-  /** 関連分野の判定キーワード（CANPANと同じ発掘用拡張） */
-  private static readonly EXTRA_KEYWORDS = [
-    "移民",
-    "難民",
-    "ひとり親",
-    "母子",
-    "貧困",
-    "孤立",
-    "食支援",
-    "フードバンク",
-    "食育",
-    "教育支援",
-    "奨学",
-    "子どもの居場所",
-    "こども",
-    "青少年",
-  ];
 
   constructor() {
     super("shimisen", "全国");
@@ -213,7 +195,7 @@ export class ShimisenScraper extends BaseScraper {
 
   /** 名称・タグは広めのキーワード、本文（説明抜粋）は誤検出を避けるため強い分野語のみで判定 */
   private isRelevant(nameAndTag: string, excerpt: string): boolean {
-    const keywords = [...SEARCH_KEYWORDS, ...ShimisenScraper.EXTRA_KEYWORDS];
+    const keywords = [...SEARCH_KEYWORDS, ...DISCOVERY_KEYWORDS];
     if (keywords.some((kw) => nameAndTag.includes(kw))) return true;
     const strongTerms = [
       "子ども食堂",
@@ -223,9 +205,10 @@ export class ShimisenScraper extends BaseScraper {
       "ひとり親",
       "外国にルーツ",
       "多文化共生",
-      "フードバンク",
       "フードパントリー",
       "子どもの貧困",
+      "不登校",
+      "体験格差",
     ];
     return strongTerms.some((kw) => excerpt.includes(kw));
   }

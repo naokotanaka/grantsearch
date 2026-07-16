@@ -112,8 +112,10 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   `expectedPeriod` の例年時期）。募集要項が変わったら手動で更新します。
 - `src/scrapers/known-grants-checker.ts` — 定番リストの各公式ページを毎週フェッチし、
   「締切/募集期間」語の近くの未来日付を検知したら `募集中` に自動昇格させます。
-- `src/scrapers/news-discovery-scraper.ts` — Google News RSS 横断検索によるマイナー
-  助成金の発掘（60日以内・上限20件、レポートの🔎セクションに掲載）。
+- `src/scrapers/news-discovery-scraper.ts` — Web横断検索によるマイナー助成金の発掘
+  （レポートの🔎セクションに掲載）。Google News RSS（募集告知60日以内・上限20件＋
+  採択報告）と DuckDuckGo検索（キー不要。ブログ・団体サイトの「〇〇助成で開催しました」
+  という活動報告から助成金名をAI抽出）の2系統。
 - `src/scrapers/shimisen-scraper.ts` — しみせん（京都市市民活動総合センター）の助成
   情報まとめ。京都限定は除外し全国応募可のものを採用。
 - `src/scrapers/index.ts` — `getAllScrapers()` でスクレイパーを登録し、全体を統括。
