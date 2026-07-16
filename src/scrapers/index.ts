@@ -105,12 +105,41 @@ export async function searchAllSources(): Promise<Grant[]> {
   // DBに保存済みの人間の入力（メモ・手動登録URL・判定）を取り込む
   // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）
   const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
+  const isBlank = (v: string) =>
+    !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
   for (const g of inScope) {
     const s = stored.get(g.id);
     if (s) {
       g.memo = s.memo;
       g.manualUrl = s.manualUrl;
       g.humanJudgment = s.humanJudgment;
+      // 過去の検索でAI読み取り（ページ・募集要項PDF）が埋めた詳細は、今回の
+      // スクレイプ値が空（要確認/不明）なら引き継ぐ。ページが一時的に読めない回が
+      // あっても、一度読み取れた情報が検索のたびにリセットされないようにする。
+      // （今回のAI読み取りが成功すれば applyExtraction が最新の内容で更新する）
+      if (isBlank(g.grantAmount) && !isBlank(s.grantAmount))
+        g.grantAmount = s.grantAmount;
+      if (isBlank(g.grantPeriod) && !isBlank(s.grantPeriod))
+        g.grantPeriod = s.grantPeriod;
+      if (isBlank(g.applicationDeadline) && !isBlank(s.applicationDeadline))
+        g.applicationDeadline = s.applicationDeadline;
+      if (!g.expectedPeriod && s.expectedPeriod)
+        g.expectedPeriod = s.expectedPeriod;
+      // 対象事業は、過去のAI読み取り結果（【対象】等の要約付き）を
+      // スクレイパーの定型文（「〇〇から自動発見」等）より優先する
+      if (
+        !isBlank(s.targetProjects) &&
+        (isBlank(g.targetProjects) ||
+          /【対象】|【要確認】/.test(s.targetProjects))
+      )
+        g.targetProjects = s.targetProjects;
+      if (g.personnelCosts === "不明" && s.personnelCosts !== "不明")
+        g.personnelCosts = s.personnelCosts;
+      if (g.honorarium === "不明" && s.honorarium !== "不明")
+        g.honorarium = s.honorarium;
+      if (g.rent === "不明" && s.rent !== "不明") g.rent = s.rent;
+      if (g.benefitType === "不明" && s.benefitType !== "不明")
+        g.benefitType = s.benefitType;
     }
   }
 
