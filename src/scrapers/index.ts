@@ -40,11 +40,15 @@ export async function searchAllSources(): Promise<Grant[]> {
   const db = getDatabase();
   const allGrants: Grant[] = [];
 
+  // 検索開始前のDBの状態を先に控えておく（人間の入力と、前回までにAI読み取りで
+  // 埋めた詳細の引き継ぎ元）。DBへの書き込みは検索の最後に一括で行う。
+  // 途中で素の値を upsert すると、この引き継ぎ元が消えてしまうため厳禁。
+  const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
+
   // 1. 定番リストの読み込み＋公式ページとの突き合わせ（募集検知で自動昇格）
   console.log("📋 定番助成金リストを確認中（各公式ページをチェック）...");
   const knownGrants = await checkKnownGrants();
   allGrants.push(...knownGrants);
-  upsertGrants(db, knownGrants);
   logSearch(db, "known", knownGrants.length);
   const openCount = knownGrants.filter((g) => g.status === "募集中").length;
   console.log(
@@ -61,7 +65,6 @@ export async function searchAllSources(): Promise<Grant[]> {
     try {
       const grants = await scraper.search();
       allGrants.push(...grants);
-      upsertGrants(db, grants);
       logSearch(db, scraperName, grants.length);
       if (grants.length === 0) {
         // 0件は「該当なし」ではなく解析不全の可能性が高いため、警告として記録する
@@ -104,7 +107,6 @@ export async function searchAllSources(): Promise<Grant[]> {
 
   // DBに保存済みの人間の入力（メモ・手動登録URL・判定）を取り込む
   // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）
-  const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
   const isBlank = (v: string) =>
     !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
   for (const g of inScope) {
