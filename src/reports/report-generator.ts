@@ -54,12 +54,33 @@ function categorize(grants: Grant[], dismissed: Grant[] = []): Sections {
     return 0;
   });
 
-  // 募集予定: 「次に来る月」が近い順（今月起点）
-  const currentMonth = new Date().getMonth() + 1;
+  // 募集予定: 「次に来る月」が近い順（今月起点）。
+  // 例年時期が今月にかかっていても、昨年実績の締切の月日を今年に当てはめて
+  // すでに過ぎていれば「今年の募集は終了＝次は来年の同時期」とみなして末尾側へ回す。
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const currentMonth = now.getMonth() + 1;
+  const finishedThisYear = (g: Grant): boolean => {
+    const lastDate = parseLastDate(g.expectedPeriod);
+    if (!lastDate) return false;
+    const projected = new Date(
+      now.getFullYear(),
+      lastDate.getMonth(),
+      lastDate.getDate(),
+    );
+    return projected.getTime() < today.getTime();
+  };
   const monthsAway = (g: Grant): number => {
     const months = parseRecruitMonths(g.expectedPeriod);
     if (months.size === 0) return 99;
-    return Math.min(...Array.from(months, (m) => (m - currentMonth + 12) % 12));
+    const finished = finishedThisYear(g);
+    return Math.min(
+      ...Array.from(months, (m) => {
+        const dist = (m - currentMonth + 12) % 12;
+        // 今月扱いでも締切済みなら、次の募集は12ヶ月後
+        return dist === 0 && finished ? 12 : dist;
+      }),
+    );
   };
   upcoming.sort((a, b) => monthsAway(a) - monthsAway(b));
 
