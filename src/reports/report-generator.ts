@@ -536,7 +536,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
   html += `
     <div class="footer">
       <p>凡例: 🟢今応募できる ／ 🟡発表待ち（例年時期を表示） ／ 🔎ウェブから自動発見（要確認） ／ ⚪状態不明</p>
-      <p>メモ欄の ✏ で調べたことを書き残せます（再検索しても消えません）。📎 で募集要項のURL（PDF可）を登録すると、AIが読み取って詳細を埋めます。</p>
+      <p>メモ欄の ✏ で調べたことを書き残せます（再検索しても消えません）。📎 で募集要項の書いてあるページやPDFのURLを登録すると、AIが読み取って詳細を埋めます。</p>
       <p>👍＝関係あり（AIが消さなくなり、募集開始を毎週チェック） ／ 👎＝関係ない（以後表示しない。判定はAIの学習材料にもなります）</p>
       <p>このレポートは自動収集した情報に基づいています。正確な情報は各助成金の公式サイトでご確認ください。</p>
       <p>生成日時: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}</p>
@@ -571,7 +571,7 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
       }
 
       if (btn.classList.contains("url-btn")) {
-        const url = prompt("募集要項のURL（PDF可）を入力すると、AIが読み取って締切・経費可否などを埋めます");
+        const url = prompt("募集要項が書いてあるページ、またはPDFのURLを入力すると、AIが読み取って締切・経費可否などを埋めます（ページ内のPDFリンクも自動で辿ります）");
         if (!url) return;
         btn.textContent = "⏳";
         btn.disabled = true;
@@ -654,7 +654,7 @@ function htmlAmount(g: Grant): string {
  */
 function memoCell(g: Grant): string {
   const yesActive = g.humanJudgment === "関係あり" ? " judge-active" : "";
-  return `<td class="memo-cell" data-id="${escapeHtml(g.id)}"><span class="memo-text">${escapeHtml(g.memo)}</span> <button type="button" class="memo-btn" title="メモを編集">✏</button><button type="button" class="url-btn" title="募集要項URLを登録してAIに読み取らせる">📎</button><button type="button" class="judge-yes-btn${yesActive}" title="関係あり（AIが消さなくなり、募集開始を毎週チェック。もう一度押すと取り消し）">👍</button><button type="button" class="judge-no-btn" title="関係ない（レポートから消える。最下部から戻せる）">👎</button></td>`;
+  return `<td class="memo-cell" data-id="${escapeHtml(g.id)}"><span class="memo-text">${escapeHtml(g.memo)}</span> <button type="button" class="memo-btn" title="メモを編集">✏</button><button type="button" class="url-btn" title="募集要項のページやPDFのURLを登録してAIに読み取らせる">📎</button><button type="button" class="judge-yes-btn${yesActive}" title="関係あり（AIが消さなくなり、募集開始を毎週チェック。もう一度押すと取り消し）">👍</button><button type="button" class="judge-no-btn" title="関係ない（レポートから消える。最下部から戻せる）">👎</button></td>`;
 }
 
 /**
