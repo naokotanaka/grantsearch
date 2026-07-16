@@ -26,6 +26,14 @@ export type GrantStatus = "募集中" | "募集前" | "募集終了" | "不明";
  */
 export type BenefitType = "資金" | "物品" | "資金＋物品" | "その他" | "不明";
 
+/**
+ * 人間の判定（レポートの👍👎ボタン）
+ * - 関係あり: AIの対象外判断で消えなくなり、毎週公式ページをチェックして募集開始を検知
+ * - 関係ない: 以後レポートに表示しない（下部の折りたたみから戻せる）
+ * - ''（空）: 未判定
+ */
+export type HumanJudgment = "" | "関係あり" | "関係ない";
+
 /** 助成金・補助金の情報 */
 export interface Grant {
   /** 一意なID（ソース名_ハッシュ） */
@@ -93,6 +101,12 @@ export interface Grant {
    * 設定されていればAI読み取りはこちらを優先して読む。再検索で消えない。
    */
   manualUrl: string;
+
+  /**
+   * 人間の判定（関係あり/関係ない）。memo・manualUrl と同じ人間の入力で、
+   * 再検索・AI読み取りでは一切上書きされない。
+   */
+  humanJudgment: HumanJudgment;
 }
 
 /** スクレイパーの設定 */

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import { Grant } from "./grant";
+import { Grant, HumanJudgment } from "./grant";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "grants.db");
@@ -42,7 +42,8 @@ function initializeSchema(db: Database.Database): void {
       benefit_type TEXT NOT NULL DEFAULT '不明',
       memo TEXT NOT NULL DEFAULT '',
       manual_url TEXT NOT NULL DEFAULT '',
-      hidden INTEGER NOT NULL DEFAULT 0
+      hidden INTEGER NOT NULL DEFAULT 0,
+      human_judgment TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS search_log (
@@ -61,6 +62,7 @@ function initializeSchema(db: Database.Database): void {
     "ALTER TABLE grants ADD COLUMN memo TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE grants ADD COLUMN manual_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE grants ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE grants ADD COLUMN human_judgment TEXT NOT NULL DEFAULT ''",
   ];
   for (const sql of migrations) {
     try {
@@ -72,15 +74,16 @@ function initializeSchema(db: Database.Database): void {
 }
 
 export function upsertGrant(db: Database.Database, grant: Grant): void {
-  // 注意: memo と manual_url は人間の入力なので、ON CONFLICT の更新対象に含めない
-  // （INSERT時の初期値としてのみ使う）。hidden は再登場したら 0（表示）に戻す。
+  // 注意: memo・manual_url・human_judgment は人間の入力なので、ON CONFLICT の
+  // 更新対象に含めない（INSERT時の初期値としてのみ使う）。
+  // hidden は再登場したら 0（表示）に戻す。
   const stmt = db.prepare(`
     INSERT INTO grants (id, name, organization, region, target_projects, grant_amount,
       grant_period, application_deadline, expected_period, personnel_costs, honorarium, rent,
-      status, url, source, last_updated, benefit_type, memo, manual_url, hidden)
+      status, url, source, last_updated, benefit_type, memo, manual_url, hidden, human_judgment)
     VALUES (@id, @name, @organization, @region, @targetProjects, @grantAmount,
       @grantPeriod, @applicationDeadline, @expectedPeriod, @personnelCosts, @honorarium, @rent,
-      @status, @url, @source, @lastUpdated, @benefitType, @memo, @manualUrl, 0)
+      @status, @url, @source, @lastUpdated, @benefitType, @memo, @manualUrl, 0, @humanJudgment)
     ON CONFLICT(id) DO UPDATE SET
       name = @name,
       organization = @organization,
@@ -140,13 +143,27 @@ export function getGrantsByRegion(
   return rows.map(rowToGrant);
 }
 
-/** 表示対象（hidden=0）の助成金を取得する。レポート生成はこれを使う */
+/**
+ * 表示対象の助成金を取得する。レポート生成はこれを使う。
+ * hidden=1 と、人間が「関係ない」と判定したものは含まない。
+ */
 export function getVisibleGrants(db: Database.Database): Grant[] {
   const rows = db
     .prepare(
-      "SELECT * FROM grants WHERE hidden = 0 ORDER BY application_deadline ASC",
+      "SELECT * FROM grants WHERE hidden = 0 AND human_judgment != '関係ない' ORDER BY application_deadline ASC",
     )
     .all() as any[];
+  return rows.map(rowToGrant);
+}
+
+/** 人間の判定が付いた助成金を取得する（'関係あり' / '関係ない'） */
+export function getGrantsByJudgment(
+  db: Database.Database,
+  judgment: HumanJudgment,
+): Grant[] {
+  const rows = db
+    .prepare("SELECT * FROM grants WHERE human_judgment = ? ORDER BY name ASC")
+    .all(judgment) as any[];
   return rows.map(rowToGrant);
 }
 
@@ -174,7 +191,19 @@ export function updateManualUrl(
   db.prepare("UPDATE grants SET manual_url = ? WHERE id = ?").run(url, id);
 }
 
-/** AI再読み取り結果を反映する（memo / manual_url は変更しない） */
+/** 人間の判定（関係あり/関係ない/空=取り消し）を更新する */
+export function updateHumanJudgment(
+  db: Database.Database,
+  id: string,
+  judgment: HumanJudgment,
+): void {
+  db.prepare("UPDATE grants SET human_judgment = ? WHERE id = ?").run(
+    judgment,
+    id,
+  );
+}
+
+/** AI再読み取り結果を反映する（memo / manual_url / human_judgment は変更しない） */
 export function updateGrantDetails(db: Database.Database, grant: Grant): void {
   db.prepare(
     `UPDATE grants SET
@@ -236,5 +265,6 @@ function rowToGrant(row: any): Grant {
     benefitType: row.benefit_type ?? "不明",
     memo: row.memo ?? "",
     manualUrl: row.manual_url ?? "",
+    humanJudgment: row.human_judgment ?? "",
   };
 }

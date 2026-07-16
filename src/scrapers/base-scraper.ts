@@ -61,6 +61,7 @@ export abstract class BaseScraper {
       benefitType: partial.benefitType ?? "不明",
       memo: partial.memo ?? "",
       manualUrl: partial.manualUrl ?? "",
+      humanJudgment: partial.humanJudgment ?? "",
     };
   }
 

@@ -130,7 +130,9 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   `POST /api/search`（検索をバックグラウンド開始、即応答）、`GET /api/status`
   （実行状態。フロントが5秒間隔でポーリング）、`GET /api/report`（最新 HTML レポート配信）、
   `POST /api/memo`（メモ保存→レポート再生成）、`POST /api/manual-url`
-  （募集要項URL登録→その場でAI読み取り→レポート再生成。レポートHTML内の✏/📎ボタンから呼ばれる）。
+  （募集要項URL登録→その場でAI読み取り→レポート再生成）、`POST /api/judgment`
+  （人間の判定 👍関係あり/👎関係ない/空=取り消し→レポート再生成）。
+  ✏/📎/👍/👎 ボタンはレポートHTML内から相対パスで呼ばれる。
   HTML 内の URL は**相対パス**（nginx が `/grantsearch/` を除去して転送するため。
   絶対パス `/api/...` に戻すと本番で壊れます）。既定バインドは `127.0.0.1`
   （gate 素通り防止。`HOST` で変更可）。
@@ -143,12 +145,19 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 `id`、`name`、`organization`、`region`、`targetProjects`、`grantAmount`、
 `grantPeriod`、`applicationDeadline`、`expectedPeriod`、`personnelCosts`、
 `honorarium`、`rent`、`benefitType`、`status`、`url`、`source`、`lastUpdated`、
-`memo`、`manualUrl`。
+`memo`、`manualUrl`、`humanJudgment`。
 
-**`memo`（人間のメモ）と `manualUrl`（人間が登録した募集要項URL）は人間の入力**です。
+**`memo`（人間のメモ）、`manualUrl`（人間が登録した募集要項URL）、
+`humanJudgment`（人間の判定 `'' | '関係あり' | '関係ない'`）は人間の入力**です。
 `upsertGrant` の ON CONFLICT 更新対象から意図的に外してあり、再検索・AI読み取りで
-消えません。システム側のコードでこの2つを書き換えないこと（専用の `updateMemo` /
-`updateManualUrl` だけが書き換える）。
+消えません。システム側のコードでこの3つを書き換えないこと（専用の `updateMemo` /
+`updateManualUrl` / `updateHumanJudgment` だけが書き換える）。
+
+`humanJudgment` はレポートの👍👎ボタンで設定されます：`関係ない`＝以後レポート非表示
+（下部の折りたたみから戻せる）＋AI読み取りスキップ／`関係あり`＝AIの対象外判断で
+消えなくなり、known-grants-checker と同じロジックで毎週公式ページをチェックして
+募集開始を検知（発掘→追跡への昇格）。判定履歴（名前一覧）はAI読み取りのプロンプトにも
+渡され、似た系統の判断材料になります（`docs/2026-07-16-human-judgment-design.md`）。
 
 `expectedPeriod` は「例年の募集時期」（例:「例年6〜7月頃（昨年実績: 2025/6/1〜7/9）」）で、
 `募集前`（＝🟡募集予定）のときにレポートへ表示されます。

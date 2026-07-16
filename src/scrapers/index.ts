@@ -7,7 +7,7 @@ import { WamScraper } from "./wam-scraper";
 import { ShimisenScraper } from "./shimisen-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { getKnownGrants } from "./known-grants";
-import { checkKnownGrants } from "./known-grants-checker";
+import { checkKnownGrants, checkGrantsOpening } from "./known-grants-checker";
 import { Grant, EXCLUDE_KEYWORDS } from "../models/grant";
 import {
   getDatabase,
@@ -93,7 +93,7 @@ export async function searchAllSources(): Promise<Grant[]> {
     return !hit;
   });
 
-  // DBに保存済みの人間の入力（メモ・手動登録URL）を取り込む
+  // DBに保存済みの人間の入力（メモ・手動登録URL・判定）を取り込む
   // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）
   const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
   for (const g of inScope) {
@@ -101,12 +101,57 @@ export async function searchAllSources(): Promise<Grant[]> {
     if (s) {
       g.memo = s.memo;
       g.manualUrl = s.manualUrl;
+      g.humanJudgment = s.humanJudgment;
     }
   }
 
+  // 「関係あり」判定済みの助成金は、今回のスクレイプに現れなくても消さない
+  // （記事が古くなって発掘元から消えても、定番と同じように追い続ける）
+  for (const s of stored.values()) {
+    if (s.humanJudgment === "関係あり" && !inScope.some((g) => g.id === s.id)) {
+      inScope.push(s);
+    }
+  }
+
+  // 「関係ない」判定済みはここで除外（AI読み取りの枠も使わない）。
+  // 行自体はDBに残り、レポート下部の折りたたみに表示される。
+  const withoutDismissed = inScope.filter((g) => {
+    if (g.humanJudgment === "関係ない") {
+      console.log(`  ✗ 人間の判定（関係ない）: ${g.name.slice(0, 40)}`);
+      return false;
+    }
+    return true;
+  });
+
+  // 「関係あり」の発掘品は定番リストと同じロジックで公式ページをチェックし、
+  // 募集開始を検知したら「募集中」へ昇格させる
+  const relevantOnes = withoutDismissed.filter(
+    (g) => g.humanJudgment === "関係あり" && g.status !== "募集中",
+  );
+  if (relevantOnes.length > 0) {
+    console.log(
+      `\n👍 「関係あり」判定の ${relevantOnes.length}件の公式ページをチェック中...`,
+    );
+    const checked = await checkGrantsOpening(relevantOnes);
+    for (const c of checked) {
+      const idx = withoutDismissed.findIndex((g) => g.id === c.id);
+      if (idx >= 0) withoutDismissed[idx] = c;
+    }
+  }
+
+  // 人間の判定履歴（関係あり/関係ないの助成金名）をAIの判断材料として渡す
+  const judgmentExamples = {
+    relevant: Array.from(stored.values())
+      .filter((g) => g.humanJudgment === "関係あり")
+      .map((g) => g.name),
+    irrelevant: Array.from(stored.values())
+      .filter((g) => g.humanJudgment === "関係ない")
+      .map((g) => g.name),
+  };
+
   // 各助成金の公式ページを読み、詳細情報（対象団体・助成額・経費可否）を充填。
   // 応募対象外と判断されたものはここで除外される。
-  const result = await enrichGrants(inScope);
+  const result = await enrichGrants(withoutDismissed, judgmentExamples);
   const statusCounts = {
     募集中: result.filter((g) => g.status === "募集中").length,
     募集前: result.filter((g) => g.status === "募集前").length,

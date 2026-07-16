@@ -2,7 +2,11 @@ import fs from "fs";
 import path from "path";
 import dayjs from "dayjs";
 import { Grant } from "../models/grant";
-import { getDatabase, getVisibleGrants } from "../models/database";
+import {
+  getDatabase,
+  getVisibleGrants,
+  getGrantsByJudgment,
+} from "../models/database";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
 
@@ -25,9 +29,11 @@ interface Sections {
   upcoming: Grant[];
   discovered: Grant[];
   unknown: Grant[];
+  /** 人間が「関係ない」と判定したもの（HTMLの折りたたみに表示、戻すボタン付き） */
+  dismissed: Grant[];
 }
 
-function categorize(grants: Grant[]): Sections {
+function categorize(grants: Grant[], dismissed: Grant[] = []): Sections {
   const open = grants.filter((g) => g.status === "募集中");
   const upcoming = grants.filter((g) => g.status === "募集前");
   const discovered = grants.filter(
@@ -60,7 +66,7 @@ function categorize(grants: Grant[]): Sections {
   // 発見: 配信日（grantPeriod に格納）の新しい順
   discovered.sort((a, b) => (a.grantPeriod < b.grantPeriod ? 1 : -1));
 
-  return { open, upcoming, discovered, unknown };
+  return { open, upcoming, discovered, unknown, dismissed };
 }
 
 /** 開始月〜終了月（年またぎ対応）を Set に展開する */
@@ -154,6 +160,7 @@ function parseLastDate(text: string): Date | null {
 export function generateAllReports(): void {
   const db = getDatabase();
   const data = getVisibleGrants(db);
+  const dismissed = getGrantsByJudgment(db, "関係ない");
   db.close();
 
   if (data.length === 0) {
@@ -165,7 +172,7 @@ export function generateAllReports(): void {
 
   ensureOutputDir();
   const timestamp = dayjs().format("YYYY-MM-DD");
-  const sections = categorize(data);
+  const sections = categorize(data, dismissed);
 
   generateMarkdownReport(sections, timestamp);
   generateHtmlReport(sections, timestamp);
@@ -389,6 +396,12 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
     .memo-text { white-space: pre-wrap; }
     .memo-cell button { border: 1px solid #ddd; background: #fafafa; border-radius: 4px; cursor: pointer; padding: 2px 6px; margin-left: 2px; font-size: 1em; }
     .memo-cell button:hover { background: #eef2f7; }
+    .memo-cell button.judge-active { background: #d4edda; border-color: #27ae60; }
+    details.dismissed { margin: 30px 0; color: #888; }
+    details.dismissed summary { cursor: pointer; padding: 8px 12px; background: #eee; border-radius: 8px; }
+    details.dismissed table { margin-top: 10px; }
+    .restore-btn { border: 1px solid #ddd; background: #fafafa; border-radius: 4px; cursor: pointer; padding: 2px 8px; }
+    .restore-btn:hover { background: #eef2f7; }
     .footer { text-align: center; color: #999; font-size: 0.85em; margin-top: 30px; padding: 20px; }
     @media (max-width: 768px) {
       table { font-size: 0.75em; }
@@ -496,10 +509,35 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
   }
   html += `      </tbody>
     </table>
+`;
 
+  // 5. 関係ないと判定したもの（折りたたみ・戻すボタン付き）
+  if (sections.dismissed.length > 0) {
+    html += `
+    <details class="dismissed">
+      <summary>👎 関係ないと判定したもの（${sections.dismissed.length}件）— 間違えて押した場合はここから戻せます</summary>
+      <table>
+        <thead><tr><th>助成金名</th><th>助成元</th><th></th></tr></thead>
+        <tbody>
+`;
+    for (const g of sections.dismissed) {
+      html += `        <tr>
+          <td>${htmlName(g)}</td>
+          <td>${escapeHtml(g.organization)}</td>
+          <td class="memo-cell" data-id="${escapeHtml(g.id)}"><button type="button" class="restore-btn">戻す</button></td>
+        </tr>\n`;
+    }
+    html += `        </tbody>
+      </table>
+    </details>
+`;
+  }
+
+  html += `
     <div class="footer">
       <p>凡例: 🟢今応募できる ／ 🟡発表待ち（例年時期を表示） ／ 🔎ウェブから自動発見（要確認） ／ ⚪状態不明</p>
       <p>メモ欄の ✏ で調べたことを書き残せます（再検索しても消えません）。📎 で募集要項のURL（PDF可）を登録すると、AIが読み取って詳細を埋めます。</p>
+      <p>👍＝関係あり（AIが消さなくなり、募集開始を毎週チェック） ／ 👎＝関係ない（以後表示しない。判定はAIの学習材料にもなります）</p>
       <p>このレポートは自動収集した情報に基づいています。正確な情報は各助成金の公式サイトでご確認ください。</p>
       <p>生成日時: ${dayjs().format("YYYY-MM-DD HH:mm:ss")}</p>
     </div>
@@ -552,6 +590,38 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
         btn.textContent = "📎";
         btn.disabled = false;
       }
+
+      if (
+        btn.classList.contains("judge-yes-btn") ||
+        btn.classList.contains("judge-no-btn") ||
+        btn.classList.contains("restore-btn")
+      ) {
+        let judgment = "";
+        if (btn.classList.contains("judge-yes-btn")) {
+          // 点灯中にもう一度押したら取り消し
+          judgment = btn.classList.contains("judge-active") ? "" : "関係あり";
+        } else if (btn.classList.contains("judge-no-btn")) {
+          if (!confirm("「関係ない」にしますか？（レポートから消えます。最下部から戻せます）")) return;
+          judgment = "関係ない";
+        }
+        btn.disabled = true;
+        try {
+          const res = await fetch("judgment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, judgment }),
+          });
+          if (res.ok) {
+            location.reload();
+          } else {
+            alert("判定の保存に失敗しました");
+            btn.disabled = false;
+          }
+        } catch {
+          alert("通信に失敗しました（このページはサーバー経由で開いてください）");
+          btn.disabled = false;
+        }
+      }
     });
   </script>
 </body>
@@ -563,9 +633,10 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
 }
 
 function htmlName(g: Grant): string {
+  const badge = g.humanJudgment === "関係あり" ? "👍 " : "";
   return g.url
-    ? `<a href="${escapeHtml(g.url)}" target="_blank">${escapeHtml(g.name)}</a>`
-    : escapeHtml(g.name);
+    ? `${badge}<a href="${escapeHtml(g.url)}" target="_blank">${escapeHtml(g.name)}</a>`
+    : `${badge}${escapeHtml(g.name)}`;
 }
 
 /** 助成額セル（HTML用）。資金以外は種別バッジを前置する */
@@ -577,9 +648,13 @@ function htmlAmount(g: Grant): string {
   return `${badge}${escapeHtml(g.grantAmount || "要確認")}`;
 }
 
-/** メモセル（✏=メモ編集・📎=募集要項URL登録。scriptが拾って処理する） */
+/**
+ * メモセル（✏=メモ編集・📎=募集要項URL登録・👍=関係あり・👎=関係ない。
+ * scriptが拾って処理する）。👍は判定済みだと点灯し、もう一度押すと取り消し。
+ */
 function memoCell(g: Grant): string {
-  return `<td class="memo-cell" data-id="${escapeHtml(g.id)}"><span class="memo-text">${escapeHtml(g.memo)}</span> <button type="button" class="memo-btn" title="メモを編集">✏</button><button type="button" class="url-btn" title="募集要項URLを登録してAIに読み取らせる">📎</button></td>`;
+  const yesActive = g.humanJudgment === "関係あり" ? " judge-active" : "";
+  return `<td class="memo-cell" data-id="${escapeHtml(g.id)}"><span class="memo-text">${escapeHtml(g.memo)}</span> <button type="button" class="memo-btn" title="メモを編集">✏</button><button type="button" class="url-btn" title="募集要項URLを登録してAIに読み取らせる">📎</button><button type="button" class="judge-yes-btn${yesActive}" title="関係あり（AIが消さなくなり、募集開始を毎週チェック。もう一度押すと取り消し）">👍</button><button type="button" class="judge-no-btn" title="関係ない（レポートから消える。最下部から戻せる）">👎</button></td>`;
 }
 
 /**

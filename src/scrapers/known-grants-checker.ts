@@ -35,12 +35,13 @@ class KnownGrantsChecker extends BaseScraper {
   }
 
   /** 1件の公式ページを確認し、募集中と判定できれば昇格させて返す */
-  private async checkOne(grant: Grant): Promise<Grant> {
-    if (!grant.url) return grant;
+  async checkOne(grant: Grant): Promise<Grant> {
+    const url = grant.manualUrl || grant.url;
+    if (!url) return grant;
 
     let text: string;
     try {
-      const $ = await this.fetchPage(grant.url);
+      const $ = await this.fetchPage(url);
       text = this.cleanText($("body").text());
     } catch (error) {
       console.log(
@@ -95,4 +96,21 @@ class KnownGrantsChecker extends BaseScraper {
 /** 定番リストを公式ページと突き合わせて返す（searchAllSources から呼ぶ） */
 export async function checkKnownGrants(): Promise<Grant[]> {
   return new KnownGrantsChecker().checkAll();
+}
+
+/**
+ * 任意の助成金リストの公式ページをチェックし、募集検知したものを昇格させて返す。
+ * 人間が「関係あり」と判定した発掘品の週次チェックに使う（定番リストと同じ検知ロジック）。
+ */
+export async function checkGrantsOpening(grants: Grant[]): Promise<Grant[]> {
+  const checker = new KnownGrantsChecker();
+  const results: Grant[] = [];
+  for (const grant of grants) {
+    try {
+      results.push(await checker.checkOne(grant));
+    } catch {
+      results.push(grant);
+    }
+  }
+  return results;
 }

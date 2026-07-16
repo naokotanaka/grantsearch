@@ -8,7 +8,9 @@ import {
   updateMemo,
   updateManualUrl,
   updateGrantDetails,
+  updateHumanJudgment,
 } from "./models/database";
+import { HumanJudgment } from "./models/grant";
 import { generateAllReports } from "./reports/report-generator";
 import { enrichSingleGrant } from "./enrich/ai-enricher";
 
@@ -93,6 +95,40 @@ export function startServer(): void {
         }
         generateAllReports(); // メモ入りのレポートに作り直す
         sendJson(res, 200, { status: "ok", message: "メモを保存しました" });
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
+    } else if (url.pathname === "/api/judgment" && req.method === "POST") {
+      // 人間の判定（👍関係あり／👎関係ない／空=取り消し）。再検索でも消えない
+      try {
+        const body = await readJsonBody(req);
+        const id = String(body.id ?? "");
+        const judgment = String(body.judgment ?? "");
+        if (!["", "関係あり", "関係ない"].includes(judgment)) {
+          sendJson(res, 400, {
+            status: "error",
+            message: "判定の値が不正です",
+          });
+          return;
+        }
+        const db = getDatabase();
+        try {
+          if (!id || !getGrantById(db, id)) {
+            sendJson(res, 400, {
+              status: "error",
+              message: "対象の助成金が見つかりません",
+            });
+            return;
+          }
+          updateHumanJudgment(db, id, judgment as HumanJudgment);
+        } finally {
+          db.close();
+        }
+        generateAllReports(); // 判定を反映したレポートに作り直す
+        sendJson(res, 200, { status: "ok", message: "判定を保存しました" });
       } catch (error) {
         sendJson(res, 400, {
           status: "error",

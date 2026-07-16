@@ -291,11 +291,47 @@ function isEnrichable(grant: Grant): boolean {
   );
 }
 
+/** 人間の判定履歴（AIの判断材料として渡す助成金名の一覧） */
+export interface JudgmentExamples {
+  relevant: string[];
+  irrelevant: string[];
+}
+
+/** 判定履歴をプロンプトに追記する文面を組み立てる（最大30件ずつ・名前のみ） */
+function buildJudgmentNote(examples?: JudgmentExamples): string {
+  if (!examples) return "";
+  const parts: string[] = [];
+  if (examples.irrelevant.length > 0) {
+    parts.push(
+      `担当者が過去に「関係ない」と判定した助成金（似た系統・同種の助成は「対象外」に倒してよい）:\n` +
+        examples.irrelevant
+          .slice(0, 30)
+          .map((n) => `  - ${n}`)
+          .join("\n"),
+    );
+  }
+  if (examples.relevant.length > 0) {
+    parts.push(
+      `担当者が過去に「関係あり」と判定した助成金（こういう系統を求めている）:\n` +
+        examples.relevant
+          .slice(0, 30)
+          .map((n) => `  - ${n}`)
+          .join("\n"),
+    );
+  }
+  if (parts.length === 0) return "";
+  return `\n\n【担当者の判定履歴】\n${parts.join("\n")}`;
+}
+
 /**
  * 全助成金の公式ページを読み、詳細情報を充填する。
  * 「対象外」と判断されたものはリストから除外して返す。
+ * judgmentExamples を渡すと、人間の判定履歴をAIの判断材料に加える。
  */
-export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
+export async function enrichGrants(
+  grants: Grant[],
+  judgmentExamples?: JudgmentExamples,
+): Promise<Grant[]> {
   const client = getClient();
   if (client) {
     console.log(
@@ -310,6 +346,7 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
     );
   }
 
+  const judgmentNote = buildJudgmentNote(judgmentExamples);
   const result: Grant[] = [];
   let processed = 0;
   let excluded = 0;
@@ -331,10 +368,15 @@ export async function enrichGrants(grants: Grant[]): Promise<Grant[]> {
 
     try {
       if (client) {
-        const extraction = await extractWithAI(client, grant, pageText);
+        const extraction = await extractWithAI(
+          client,
+          grant,
+          pageText,
+          judgmentNote,
+        );
         if (extraction.applicable === "対象外") {
-          if (grant.manualUrl) {
-            // 人間が関係あると判断して登録したものはAIの判断で消さず、要確認に落とす
+          if (grant.manualUrl || grant.humanJudgment === "関係あり") {
+            // 人間が関係あると判断したものはAIの判断で消さず、要確認に落とす
             extraction.applicable = "要確認";
           } else {
             excluded++;
@@ -367,11 +409,12 @@ async function extractWithAI(
   client: Anthropic,
   grant: Grant,
   pageText: string,
+  judgmentNote = "",
 ): Promise<ExtractionResult> {
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+    system: SYSTEM_PROMPT + judgmentNote,
     output_config: {
       format: { type: "json_schema", schema: EXTRACTION_SCHEMA },
     },
