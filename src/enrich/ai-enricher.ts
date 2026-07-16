@@ -453,7 +453,8 @@ async function extractWithAI(
 ): Promise<ExtractionResult> {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 1024,
+    // モデルが思考にトークンを使う場合があるため、途中で切れない十分な上限にする
+    max_tokens: 4096,
     system: SYSTEM_PROMPT + judgmentNote,
     output_config: {
       format: { type: "json_schema", schema: EXTRACTION_SCHEMA },
@@ -468,7 +469,9 @@ async function extractWithAI(
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
-    throw new Error("AI応答にテキストがありません");
+    throw new Error(
+      `AI応答にテキストがありません（stop_reason: ${response.stop_reason}、ブロック: ${response.content.map((b) => b.type).join(",") || "なし"}）`,
+    );
   }
   return JSON.parse(textBlock.text) as ExtractionResult;
 }
