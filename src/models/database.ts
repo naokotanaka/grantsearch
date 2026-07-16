@@ -197,10 +197,12 @@ export function updateHumanJudgment(
   id: string,
   judgment: HumanJudgment,
 ): void {
-  db.prepare("UPDATE grants SET human_judgment = ? WHERE id = ?").run(
-    judgment,
-    id,
-  );
+  // 「関係ない」以外へ変えるとき（取り消し・関係あり）は hidden も解除する。
+  // 👎 → 検索実行 → 「戻す」の順だと hidden=1 が残り、本体にも折りたたみにも
+  // 表示されない迷子になるため、戻した行は必ず再表示する
+  db.prepare(
+    "UPDATE grants SET human_judgment = ?, hidden = CASE WHEN ? = '関係ない' THEN hidden ELSE 0 END WHERE id = ?",
+  ).run(judgment, judgment, id);
 }
 
 /** AI再読み取り結果を反映する（memo / manual_url / human_judgment は変更しない） */

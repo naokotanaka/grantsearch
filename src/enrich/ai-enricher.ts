@@ -355,9 +355,15 @@ export async function enrichGrants(
   protectedIds?: Set<string>,
 ): Promise<Grant[]> {
   const client = getClient();
+  const enrichableCount = grants.filter(isEnrichable).length;
+  if (enrichableCount > MAX_PAGES) {
+    console.warn(
+      `  ⚠ 読み取り対象 ${enrichableCount}件が上限 ${MAX_PAGES}件を超えています（超過分は読み取りをスキップして掲載）`,
+    );
+  }
   if (client) {
     console.log(
-      `\n🤖 公式ページをAIで読み取り中（モデル: ${MODEL}、対象 ${Math.min(grants.filter(isEnrichable).length, MAX_PAGES)}件）...`,
+      `\n🤖 公式ページをAIで読み取り中（モデル: ${MODEL}、対象 ${Math.min(enrichableCount, MAX_PAGES)}件）...`,
     );
   } else {
     console.log(
@@ -502,15 +508,9 @@ function applyExtraction(
     .filter(Boolean)
     .join(" ");
 
-  // 助成額は額面だけの短い表記が正。既存値が注記付きで冗長（25字超）なら、
-  // より短い抽出値で置き換える（過去に長文で保存された行の解消）
-  const amountCandidate = clamp(ex.grantAmount, 30);
-  const grantAmount =
-    !isEmpty(amountCandidate) &&
-    grant.grantAmount.length > 25 &&
-    amountCandidate.length < grant.grantAmount.length
-      ? amountCandidate
-      : pick(grant.grantAmount, amountCandidate);
+  // 助成額: 既存の有効な値は上書きしない（「コースにより異なる」等の
+  // 有用な注記を、AIの短い数値表記で潰さない）
+  const grantAmount = pick(grant.grantAmount, clamp(ex.grantAmount, 30));
 
   return {
     ...grant,

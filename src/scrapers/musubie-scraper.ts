@@ -35,6 +35,10 @@ export class MusubieScraper extends BaseScraper {
         const $ = await this.fetchPage(url);
         grants.push(...this.parseListPage($));
       } catch (error) {
+        // 2ページ目以降の404は「そのページが無い」だけなので静かに終える
+        const status = (error as { response?: { status?: number } })?.response
+          ?.status;
+        if (status === 404 && url !== this.pageUrls[0]) break;
         console.error(
           `[むすびえ] ページ取得に失敗 (${url}):`,
           error instanceof Error ? error.message : error,

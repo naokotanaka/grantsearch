@@ -107,8 +107,16 @@ export class WamScraper extends BaseScraper {
     const targetProjects =
       "子ども食堂・居場所づくり・生活困窮者支援など、社会福祉振興のためのNPO等の事業";
 
+    // 名前は「次回募集」⇔「令和N年度」と状態で変わるため、IDは種別だけから
+    // 生成して安定させる（IDが変わるとメモ・👍👎が引き継がれない）
+    const stableId = this.generateId(
+      `WAM助成（${type}）`,
+      "独立行政法人 福祉医療機構（WAM）",
+    );
+
     if (deadlineDate && deadlineDate >= now) {
       return this.createGrant({
+        id: stableId,
         name: `WAM助成（${type}）${title.match(/令和\d+年度|20\d{2}年度/)?.[0] ?? ""}`,
         organization: "独立行政法人 福祉医療機構（WAM）",
         region: "全国",
@@ -131,6 +139,7 @@ export class WamScraper extends BaseScraper {
       ? `例年${deadlineDate.getMonth() + 1}月頃締切`
       : "例年12月〜1月頃";
     return this.createGrant({
+      id: stableId,
       name: `WAM助成（${type}）次回募集`,
       organization: "独立行政法人 福祉医療機構（WAM）",
       region: "全国",

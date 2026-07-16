@@ -161,6 +161,22 @@ export async function searchAllSources(): Promise<Grant[]> {
     return true;
   });
 
+  // 「関係あり」で募集中の行も、締切が過ぎていたら要確認へ戻す。
+  // そうしないと（元ソースに再登場しない発掘品は）締切後も永久に
+  // 「募集中」のままレポートに残り続ける
+  const nowDate = new Date();
+  for (const g of withoutDismissed) {
+    if (g.humanJudgment !== "関係あり" || g.status !== "募集中") continue;
+    const deadline = lastDeadlineDate(g.applicationDeadline);
+    if (deadline && deadline < nowDate) {
+      console.log(
+        `  ⏳ 締切超過のため要確認へ: ${g.name.slice(0, 40)}（${g.applicationDeadline.slice(0, 30)}）`,
+      );
+      g.status = "不明";
+      g.applicationDeadline = "要確認";
+    }
+  }
+
   // 「関係あり」の発掘品は定番リストと同じロジックで公式ページをチェックし、
   // 募集開始を検知したら「募集中」へ昇格させる
   const relevantOnes = withoutDismissed.filter(
@@ -269,6 +285,17 @@ export function dedupeAcrossSources(
   }
 
   return kept.map((k) => k.grant);
+}
+
+/** 締切テキスト中の最後の日付（年付きのみ）を返す */
+function lastDeadlineDate(text: string): Date | null {
+  const matches = [
+    ...text.matchAll(/(?:令和(\d+)年|(\d{4})年)(\d{1,2})月(\d{1,2})日/g),
+  ];
+  if (matches.length === 0) return null;
+  const m = matches[matches.length - 1];
+  const year = m[1] ? 2018 + parseInt(m[1]) : parseInt(m[2]);
+  return new Date(year, parseInt(m[3]) - 1, parseInt(m[4]));
 }
 
 /** 2つの文字列の最長共通部分文字列の長さ */
