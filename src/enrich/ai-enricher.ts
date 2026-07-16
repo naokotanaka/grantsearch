@@ -308,7 +308,10 @@ function buildJudgmentNote(examples?: JudgmentExamples): string {
   const parts: string[] = [];
   if (examples.irrelevant.length > 0) {
     parts.push(
-      `担当者が過去に「関係ない」と判定した助成金（似た系統・同種の助成は「対象外」に倒してよい）:\n` +
+      `担当者が過去に「関係ない」と判定した助成金。助成の内容（分野・対象・支給内容）が
+これらと同種のものは「対象外」に倒してよい。ただし、主催・仲介団体が同じというだけで
+同種とみなさないこと（むすびえ・共同募金会などは性質の異なる多数の助成を扱っている。
+判定はあくまで1件ごとの内容で行う）:\n` +
         examples.irrelevant
           .slice(0, 30)
           .map((n) => `  - ${n}`)
