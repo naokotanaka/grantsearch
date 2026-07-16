@@ -55,6 +55,11 @@ export class MusubieScraper extends BaseScraper {
 
     // 記事本文から公式サイトへのリンクを探して差し替える（本文コンテナ内のみ走査）
     for (const grant of result) {
+      // むすびえ自身が主催・共催する助成（タイトルに「むすびえ」）は、むすびえの
+      // 記事そのものが公式告知なので差し替えない。差し替えると企業の紹介ページ等に
+      // 飛び、AIが別企画を読んでしまう（例: ファミマ＆むすびえ スタート応援助成の
+      // URLがファミマの部活おむすびキャンペーンのページになっていた）
+      if (/むすびえ/.test(grant.name)) continue;
       const official =
         (await this.resolveOfficialUrl(
           grant.url,
