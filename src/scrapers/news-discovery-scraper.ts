@@ -130,6 +130,25 @@ export class NewsDiscoveryScraper extends BaseScraper {
   private static readonly REPORT_PATTERN =
     /採択|助成が決定|助成金を活用|助成を受け|助成により|助成をいただ|から助成|より助成/;
 
+  /** 愛知以外の46都道府県名（他地域限定の告知の検出用） */
+  private static readonly OTHER_PREFS =
+    /北海道|青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|東京|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|三重|滋賀|京都|大阪|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄/;
+
+  /**
+   * 他の自治体の補助金告知らしいタイトルか。
+   * 当団体（長久手市）は他の都道府県・市町村限定の補助金に応募できないため、
+   * 発掘段階で除外する（例:「【真鶴町】子ども食堂の実施団体を募集」
+   * 「兵庫県〇〇補助」）。名古屋市は愛知県内だが長久手市ではないので同様に除外。
+   * ページが読めずAIチェックを素通りする記事への対策。
+   */
+  private isOtherLocality(title: string): boolean {
+    if (/愛知|長久手|全国/.test(title)) return false;
+    if (NewsDiscoveryScraper.OTHER_PREFS.test(title)) return true;
+    if (/名古屋市/.test(title)) return true;
+    // タイトル冒頭または【】内の「〇〇市/町/村」（直後が「民」の市民活動等は除く）
+    return /(?:^|【)[一-龥ぁ-んァ-ヶー]{1,6}[市町村](?![民])/.test(title);
+  }
+
   /**
    * 他団体の採択報告・活動報告を検索し、記事タイトルから助成金名をAIで抽出して
    * 「発見候補」として返す。既に追跡済みの助成金は後段の名前ベース重複除去
@@ -201,6 +220,9 @@ export class NewsDiscoveryScraper extends BaseScraper {
       const key = e.grantName.replace(/\s/g, "");
       if (seen.has(key)) continue;
       seen.add(key);
+
+      // 他の自治体の助成金（例:「〇〇市子ども食堂補助金」）は応募できないため除外
+      if (this.isOtherLocality(e.grantName)) continue;
 
       const grant = this.createGrant({
         id: this.generateId(e.grantName, "adoption"),
@@ -291,6 +313,9 @@ export class NewsDiscoveryScraper extends BaseScraper {
         if (!/助成|補助金|支援金|基金/.test(title)) return;
         if (!/募集|公募|受付|応募|申請|案内|開始/.test(title)) return;
         if (/贈呈|寄付を実施|採択|決定しました|報告/.test(title)) return;
+
+        // 他の都道府県・市町村の補助金告知は応募できないため除外
+        if (this.isOtherLocality(title)) return;
 
         // 配信日（古い記事は除外）
         const published = pubDateText ? new Date(pubDateText) : null;
