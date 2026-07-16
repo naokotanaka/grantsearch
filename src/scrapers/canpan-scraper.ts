@@ -54,10 +54,16 @@ export class CanpanScraper extends BaseScraper {
       );
     }
 
-    // CANPANの詳細ページではなく公式サイトへのリンクに差し替える
+    // CANPANの詳細ページではなく公式サイトへのリンクに差し替える。
+    // CANPANは日本財団の運営サイトで、ページ内に日本財団本体へのリンクが常に
+    // あるため、助成元が日本財団でない限り候補から外す（例: 日本フィランソロピック
+    // 財団の助成が日本財団トップにリンクされていた事故の防止）
     for (const grant of result) {
+      const exclude = /日本財団/.test(grant.organization)
+        ? /canpan\.info/
+        : /canpan\.info|nippon-foundation\.or\.jp/;
       const official =
-        (await this.resolveOfficialUrl(grant.url, /canpan\.info/)) ??
+        (await this.resolveOfficialUrl(grant.url, exclude)) ??
         (await this.searchOfficialSite(
           `${grant.name} ${grant.organization}`,
           CanpanScraper.AGGREGATOR_SITES,
