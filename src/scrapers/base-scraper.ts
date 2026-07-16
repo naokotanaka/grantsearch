@@ -202,6 +202,15 @@ export abstract class BaseScraper {
         if (/btn|external|official/.test(cls)) score += 2;
         if (/\.pdf($|[?#])/i.test(href)) score -= 2; // 申請書PDFよりページを優先
         if (/contact|otoiawase|inquiry/i.test(href)) score -= 3; // 問い合わせページは避ける
+        // 年度入りURLは新しい年度を優先（例: boshu_2026 を boshu_2025 より上に。
+        // 古い年度の募集ページにリンクしてしまう事故の防止）
+        const yearInUrl = href.match(/20\d{2}/);
+        if (yearInUrl) {
+          const currentYear = new Date().getFullYear();
+          const y = parseInt(yearInUrl[0]);
+          if (y >= currentYear) score += 2;
+          else score -= 2;
+        }
 
         const current = byDomain.get(domain);
         if (current) {
