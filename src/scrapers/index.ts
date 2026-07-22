@@ -95,28 +95,22 @@ export async function searchAllSources(): Promise<Grant[]> {
     uniqueGrants.set(grant.id, grant);
   }
 
-  // 複数の情報源が同じ助成金を載せていることがあるため、名前ベースでも重複を畳む。
-  // 定番・「関係あり」が畳まれた場合は、残った代表がAI除外からの保護を引き継ぐ
-  const protectedIds = new Set<string>();
-  const deduped = dedupeAcrossSources(
-    Array.from(uniqueGrants.values()),
-    protectedIds,
-  );
-
-  // 活動分野外（被災地・災害支援など）は掲載しない
-  const inScope = deduped.filter((g) => {
-    const text = g.name + g.targetProjects;
-    const hit = EXCLUDE_KEYWORDS.find((kw) => text.includes(kw));
-    if (hit)
-      console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
-    return !hit;
-  });
+  // 「関係あり」判定済みの助成金は、今回のスクレイプに現れなくても消さない
+  // （記事が古くなって発掘元から消えても、定番と同じように追い続ける）。
+  // 名前ベースの畳み込みの前に候補へ加えることで、同じ助成金が別の名前で
+  // 再発見されたときも2行にならず1行に畳まれる
+  for (const s of stored.values()) {
+    if (s.humanJudgment === "関係あり" && !uniqueGrants.has(s.id)) {
+      uniqueGrants.set(s.id, s);
+    }
+  }
 
   // DBに保存済みの人間の入力（メモ・手動登録URL・判定）を取り込む
-  // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）
+  // （スクレイパーが作った Grant は毎回空で始まるため。manualUrl はAI読み取りで使う）。
+  // 畳み込みの前に取り込むことで、👍・📎・メモの付いた行が代表として残る
   const isBlank = (v: string) =>
     !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
-  for (const g of inScope) {
+  for (const g of uniqueGrants.values()) {
     const s = stored.get(g.id);
     if (s) {
       g.memo = s.memo;
@@ -152,13 +146,24 @@ export async function searchAllSources(): Promise<Grant[]> {
     }
   }
 
-  // 「関係あり」判定済みの助成金は、今回のスクレイプに現れなくても消さない
-  // （記事が古くなって発掘元から消えても、定番と同じように追い続ける）
-  for (const s of stored.values()) {
-    if (s.humanJudgment === "関係あり" && !inScope.some((g) => g.id === s.id)) {
-      inScope.push(s);
-    }
-  }
+  // 複数の情報源が同じ助成金を載せていることがあるため、名前ベースでも重複を畳む。
+  // 定番・「関係あり」が畳まれた場合は、残った代表がAI除外からの保護を引き継ぐ
+  const protectedIds = new Set<string>();
+  const deduped = dedupeAcrossSources(
+    Array.from(uniqueGrants.values()),
+    protectedIds,
+  );
+
+  // 活動分野外（被災地・災害支援など）は掲載しない
+  // （人間が「関係あり」と判定したものは除外しない）
+  const inScope = deduped.filter((g) => {
+    if (g.humanJudgment === "関係あり") return true;
+    const text = g.name + g.targetProjects;
+    const hit = EXCLUDE_KEYWORDS.find((kw) => text.includes(kw));
+    if (hit)
+      console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
+    return !hit;
+  });
 
   // 「関係ない」判定済みはここで除外（AI読み取りの枠も使わない）。
   // 行自体はDBに残り、レポート下部の折りたたみに表示される。
@@ -263,9 +268,34 @@ export function dedupeAcrossSources(
       .replace(/第\s*\d+\s*[回期次]/g, "")
       .replace(/募集|公募/g, "")
       .replace(/[-‐－―…]+$/g, "");
+  const LEGAL_FORMS =
+    /公益財団法人|一般財団法人|公益社団法人|一般社団法人|社会福祉法人|特定非営利活動法人|認定NPO法人|NPO法人|株式会社/g;
+  const normalizeOrg = (org: string): string =>
+    org.replace(/[\s　]/g, "").replace(LEGAL_FORMS, "");
+  /**
+   * 助成金名が「〇〇財団助成金」のような、団体名＋一般語だけの汎用タイトルか。
+   * （プログラム固有の名前を持たない側だけを、団体・締切・金額での同一視の対象にする。
+   * 同じ財団が同じ締切・同じ金額で複数プログラムを同時募集することがあるため、
+   * 固有名同士は名前の類似だけで判定する）
+   */
+  const isGenericName = (norm: string, orgNorm: string): boolean => {
+    const stripped = norm
+      .replace(LEGAL_FORMS, "")
+      .split(orgNorm)
+      .join("")
+      .replace(
+        /助成金|助成事業|助成プログラム|助成|補助金|支援金|基金|事業/g,
+        "",
+      );
+    return stripped.length <= 2;
+  };
 
-  // 情報の充実度（大きいほど優先して残す）
+  // 情報の充実度（大きいほど優先して残す）。人間の入力（👍・📎・メモ）の
+  // 付いた行は必ず代表として残す（畳まれる側になると入力が見えなくなるため）
   const score = (g: Grant): number =>
+    (g.humanJudgment === "関係あり" ? 200 : 0) +
+    (g.manualUrl ? 60 : 0) +
+    (g.memo ? 30 : 0) +
     (g.status === "募集中" ? 100 : 0) +
     (g.expectedPeriod.includes("発表済み") ? 50 : 0) +
     (g.expectedPeriod.includes("昨年実績") ? 20 : 0) +
@@ -273,19 +303,46 @@ export function dedupeAcrossSources(
     (g.targetProjects ? 10 : 0) +
     (g.grantAmount !== "要確認" ? 5 : 0);
 
-  const kept: { grant: Grant; norm: string }[] = [];
+  const kept: { grant: Grant; norm: string; orgNorm: string }[] = [];
 
   for (const grant of grants.slice().sort((a, b) => score(b) - score(a))) {
     const norm = normalize(grant.name);
+    const orgNorm = normalizeOrg(grant.organization);
     const dupOf = kept.find((k) => {
       const [a, b] = [k.norm, norm];
       const shorter = a.length <= b.length ? a : b;
       // 片方がもう片方を含む、または13文字以上の共通部分がある場合は同一助成金とみなす
       if (shorter.length >= 8 && (a.includes(b) || b.includes(a))) return true;
-      return longestCommonSubstring(a, b) >= 13;
+      if (longestCommonSubstring(a, b) >= 13) return true;
+      // 名前が大きく違っても（例:「ミダス財団助成金」と「ミダス財団『日本国内で
+      // 支援を必要とする子どもたち…への助成』」）、片方が汎用タイトルで、
+      // 同じ団体・同じ締切日・同じ助成額なら同一助成金とみなす。
+      // 両方が固有のプログラム名を持つ場合は適用しない（同じ財団が同じ締切・
+      // 同じ金額で別プログラムを同時募集することがあるため）
+      const [oa, ob] = [k.orgNorm, orgNorm];
+      if (
+        oa.length >= 4 &&
+        ob.length >= 4 &&
+        (oa.includes(ob) || ob.includes(oa)) &&
+        (isGenericName(k.norm, oa) || isGenericName(norm, ob))
+      ) {
+        const amountA = k.grant.grantAmount.replace(/[\s　]/g, "");
+        const amountB = grant.grantAmount.replace(/[\s　]/g, "");
+        if (
+          amountA &&
+          amountA === amountB &&
+          amountA !== "要確認" &&
+          amountA !== "不明"
+        ) {
+          const da = lastDeadlineDate(k.grant.applicationDeadline);
+          const db = lastDeadlineDate(grant.applicationDeadline);
+          if (da && db && da.getTime() === db.getTime()) return true;
+        }
+      }
+      return false;
     });
     if (!dupOf) {
-      kept.push({ grant, norm });
+      kept.push({ grant, norm, orgNorm });
       if (isProtected(grant)) protectedIds?.add(grant.id);
     } else if (isProtected(grant)) {
       // 畳まれる側が定番・関係ありなら、残る代表に保護を引き継ぐ
