@@ -207,13 +207,25 @@ export async function searchAllSources(): Promise<Grant[]> {
     }
   }
 
-  // 人間の判定履歴（関係あり/関係ないの助成金名）をAIの判断材料として渡す
+  // 人間の判定履歴（関係あり/関係ないの助成金名）をAIの判断材料として渡す。
+  // 同じ団体に「関係あり」と「関係ない」が混在する場合（別名の重複行や旧事業名の
+  // 行を👎で消した場合など）は、内容として関係ある系統を「関係ない」と誤学習
+  // させないため、「関係ない」側の例からは外す
+  const relevantOrgs = new Set(
+    Array.from(stored.values())
+      .filter((g) => g.humanJudgment === "関係あり")
+      .map((g) => normalizeOrgName(g.organization)),
+  );
   const judgmentExamples = {
     relevant: Array.from(stored.values())
       .filter((g) => g.humanJudgment === "関係あり")
       .map((g) => g.name),
     irrelevant: Array.from(stored.values())
-      .filter((g) => g.humanJudgment === "関係ない")
+      .filter(
+        (g) =>
+          g.humanJudgment === "関係ない" &&
+          !relevantOrgs.has(normalizeOrgName(g.organization)),
+      )
       .map((g) => g.name),
   };
 
@@ -268,10 +280,6 @@ export function dedupeAcrossSources(
       .replace(/第\s*\d+\s*[回期次]/g, "")
       .replace(/募集|公募/g, "")
       .replace(/[-‐－―…]+$/g, "");
-  const LEGAL_FORMS =
-    /公益財団法人|一般財団法人|公益社団法人|一般社団法人|社会福祉法人|特定非営利活動法人|認定NPO法人|NPO法人|株式会社/g;
-  const normalizeOrg = (org: string): string =>
-    org.replace(/[\s　]/g, "").replace(LEGAL_FORMS, "");
   /**
    * 助成金名が「〇〇財団助成金」のような、団体名＋一般語だけの汎用タイトルか。
    * （プログラム固有の名前を持たない側だけを、団体・締切・金額での同一視の対象にする。
@@ -307,7 +315,7 @@ export function dedupeAcrossSources(
 
   for (const grant of grants.slice().sort((a, b) => score(b) - score(a))) {
     const norm = normalize(grant.name);
-    const orgNorm = normalizeOrg(grant.organization);
+    const orgNorm = normalizeOrgName(grant.organization);
     const dupOf = kept.find((k) => {
       const [a, b] = [k.norm, norm];
       const shorter = a.length <= b.length ? a : b;
@@ -326,18 +334,24 @@ export function dedupeAcrossSources(
         (oa.includes(ob) || ob.includes(oa)) &&
         (isGenericName(k.norm, oa) || isGenericName(norm, ob))
       ) {
+        const blankAmount = (v: string) => !v || v === "要確認" || v === "不明";
         const amountA = k.grant.grantAmount.replace(/[\s　]/g, "");
         const amountB = grant.grantAmount.replace(/[\s　]/g, "");
-        if (
-          amountA &&
-          amountA === amountB &&
-          amountA !== "要確認" &&
-          amountA !== "不明"
-        ) {
+        // 同じ締切日＋同じ助成額なら同一
+        if (!blankAmount(amountA) && amountA === amountB) {
           const da = lastDeadlineDate(k.grant.applicationDeadline);
           const db = lastDeadlineDate(grant.applicationDeadline);
           if (da && db && da.getTime() === db.getTime()) return true;
         }
+        // 両方「随時」受付なら締切日が無いので、金額が矛盾しない限り同一とみなす
+        // （例: サウンドハウスこどものみらい財団の「助成金」と
+        // CANPAN表記の「こどものみらい基金」）
+        if (
+          /随時/.test(k.grant.applicationDeadline) &&
+          /随時/.test(grant.applicationDeadline) &&
+          (amountA === amountB || blankAmount(amountA) || blankAmount(amountB))
+        )
+          return true;
       }
       return false;
     });
@@ -351,6 +365,22 @@ export function dedupeAcrossSources(
   }
 
   return kept.map((k) => k.grant);
+}
+
+/** 法人格の表記（団体名の比較時に無視する） */
+const LEGAL_FORMS =
+  /公益財団法人|一般財団法人|公益社団法人|一般社団法人|社会福祉法人|特定非営利活動法人|認定NPO法人|NPO法人|株式会社/g;
+
+/**
+ * 団体名の正規化（空白・法人格を除去）。
+ * 名前側の normalize と表記を揃えるため、「こども→子ども」もここで統一する
+ * （揃っていないと isGenericName の団体名除去が失敗する）
+ */
+function normalizeOrgName(org: string): string {
+  return org
+    .replace(/[\s　]/g, "")
+    .replace(LEGAL_FORMS, "")
+    .replace(/こども/g, "子ども");
 }
 
 /** 締切テキスト中の最後の日付（年付きのみ）を返す */
