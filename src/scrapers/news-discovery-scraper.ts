@@ -102,9 +102,8 @@ export class NewsDiscoveryScraper extends BaseScraper {
     // Google News の転送URLは機械では解決できないため、
     // 記事タイトルで検索して公式サイト（または元記事）のURLに差し替える
     for (const grant of result) {
-      const official = await this.searchOfficialSite(
+      const official = await this.resolveOfficialSite(
         grant.name.replace(/…$/, ""),
-        NewsDiscoveryScraper.AGGREGATOR_SITES,
       );
       if (official) grant.url = official;
     }
@@ -124,6 +123,31 @@ export class NewsDiscoveryScraper extends BaseScraper {
     }
 
     return result;
+  }
+
+  /**
+   * 助成金名から公式サイトのURLを解決する。
+   * 検索結果がプレスリリース配信サイト（PR TIMES等）だったときは、
+   * 記事内の公式サイトリンクを辿り、無ければ配信サイトを除外して再検索する
+   * （記事のまま載せると読み手が公式ページへ飛べないため）。
+   * それでも見つからなければ配信サイトの記事をそのまま使う。
+   */
+  private async resolveOfficialSite(name: string): Promise<string | null> {
+    const found = await this.searchOfficialSite(
+      name,
+      NewsDiscoveryScraper.AGGREGATOR_SITES,
+    );
+    if (!found || !BaseScraper.PRESS_RELEASE_SITES.test(found)) return found;
+
+    const excludePress = new RegExp(
+      `${NewsDiscoveryScraper.AGGREGATOR_SITES.source}|${BaseScraper.PRESS_RELEASE_SITES.source}`,
+    );
+    // プレスリリース記事本文中の公式サイトリンクが最も確実
+    const viaArticle = await this.resolveOfficialUrl(found, excludePress);
+    if (viaArticle) return viaArticle;
+    // 記事にリンクが無ければ、配信サイトを除外して公式サイトを探し直す
+    const researched = await this.searchOfficialSite(name, excludePress);
+    return researched ?? found;
   }
 
   /** 採択報告・活動報告らしい文かどうか（助成金名の抽出に回す価値があるか） */
@@ -236,10 +260,7 @@ export class NewsDiscoveryScraper extends BaseScraper {
       });
 
       // 記事URLはGoogle Newsの転送URLなので、助成金名で公式サイトを探して差し替える
-      const official = await this.searchOfficialSite(
-        e.grantName,
-        NewsDiscoveryScraper.AGGREGATOR_SITES,
-      );
+      const official = await this.resolveOfficialSite(e.grantName);
       if (official) grant.url = official;
 
       grants.push(grant);

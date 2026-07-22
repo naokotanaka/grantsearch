@@ -1,16 +1,21 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { getSearchState, startSearch } from "./search-runner";
 import {
   getDatabase,
   getGrantById,
+  upsertGrant,
   updateMemo,
   updateManualUrl,
   updateGrantDetails,
   updateHumanJudgment,
+  getWatchSites,
+  addWatchSite,
+  deleteWatchSite,
 } from "./models/database";
-import { HumanJudgment } from "./models/grant";
+import { Grant, HumanJudgment, Region } from "./models/grant";
 import { generateAllReports } from "./reports/report-generator";
 import { enrichSingleGrant } from "./enrich/ai-enricher";
 
@@ -199,6 +204,171 @@ export function startServer(): void {
           message: error instanceof Error ? error.message : "不正なリクエスト",
         });
       }
+    } else if (url.pathname === "/api/add-grant" && req.method === "POST") {
+      // 助成金の手動追加。「関係あり」👍として登録し（再検索でも消えず、
+      // 毎週公式ページをチェックして募集開始を検知）、その場でAIが詳細を読み取る
+      try {
+        const body = await readJsonBody(req);
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 100);
+        const organization =
+          String(body.organization ?? "")
+            .trim()
+            .slice(0, 100) || "要確認";
+        const grantUrl = String(body.url ?? "").trim();
+        const regionInput = String(body.region ?? "全国");
+        const region: Region = (
+          ["全国", "愛知県", "長久手市"] as const
+        ).includes(regionInput as Region)
+          ? (regionInput as Region)
+          : "全国";
+        if (!name) {
+          sendJson(res, 400, {
+            status: "error",
+            message: "助成金名を入力してください",
+          });
+          return;
+        }
+        if (!/^https?:\/\//.test(grantUrl)) {
+          sendJson(res, 400, {
+            status: "error",
+            message: "http(s) のURLを入力してください",
+          });
+          return;
+        }
+
+        const id =
+          "manual_" +
+          crypto
+            .createHash("md5")
+            .update(`${name}_${organization}`)
+            .digest("hex")
+            .slice(0, 8);
+        const grant: Grant = {
+          id,
+          name,
+          organization,
+          region,
+          targetProjects: "手動登録（内容はリンク先参照）",
+          grantAmount: "要確認",
+          grantPeriod: "要確認",
+          applicationDeadline: "要確認",
+          expectedPeriod: "",
+          personnelCosts: "不明",
+          honorarium: "不明",
+          rent: "不明",
+          benefitType: "不明",
+          status: "不明",
+          url: grantUrl,
+          source: "manual",
+          lastUpdated: new Date().toISOString(),
+          memo: "",
+          manualUrl: "",
+          humanJudgment: "",
+        };
+        const db = getDatabase();
+        try {
+          upsertGrant(db, grant);
+          // 手動追加＝人間が「関係あり」と判断したもの。👍と同じ扱いにして
+          // 追跡（毎週の募集開始チェック・AI除外からの保護）に載せる
+          updateHumanJudgment(db, id, "関係あり");
+        } finally {
+          db.close();
+        }
+
+        // その場でAIがページを読んで詳細を埋める（読めなくても登録自体は成立）
+        const enriched = await enrichSingleGrant({
+          ...grant,
+          humanJudgment: "関係あり",
+        });
+        if (enriched) {
+          const db2 = getDatabase();
+          try {
+            updateGrantDetails(db2, enriched);
+          } finally {
+            db2.close();
+          }
+        }
+        generateAllReports();
+        sendJson(res, 200, {
+          status: "ok",
+          message: enriched
+            ? "追加しました。AIがページを読み取り、詳細を反映しました"
+            : "追加しました（ページの読み取りは次回の検索時に行います）",
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
+    } else if (url.pathname === "/api/watch-sites" && req.method === "GET") {
+      // 巡回サイトの一覧
+      const db = getDatabase();
+      try {
+        sendJson(res, 200, { status: "ok", sites: getWatchSites(db) });
+      } finally {
+        db.close();
+      }
+    } else if (url.pathname === "/api/watch-sites" && req.method === "POST") {
+      // 巡回サイトの追加（毎週の検索でページ内の助成金リンクを拾う）
+      try {
+        const body = await readJsonBody(req);
+        const siteUrl = String(body.url ?? "").trim();
+        if (!/^https?:\/\//.test(siteUrl)) {
+          sendJson(res, 400, {
+            status: "error",
+            message: "http(s) のURLを入力してください",
+          });
+          return;
+        }
+        const label =
+          String(body.label ?? "")
+            .trim()
+            .slice(0, 60) || new URL(siteUrl).hostname;
+        const db = getDatabase();
+        try {
+          addWatchSite(db, label, siteUrl);
+        } finally {
+          db.close();
+        }
+        sendJson(res, 200, {
+          status: "ok",
+          message:
+            "巡回サイトを追加しました。次回の検索から助成金リンクを拾います",
+        });
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
+    } else if (
+      url.pathname === "/api/watch-sites/delete" &&
+      req.method === "POST"
+    ) {
+      // 巡回サイトの削除
+      try {
+        const body = await readJsonBody(req);
+        const id = Number(body.id);
+        if (!Number.isInteger(id)) {
+          sendJson(res, 400, { status: "error", message: "idが不正です" });
+          return;
+        }
+        const db = getDatabase();
+        try {
+          deleteWatchSite(db, id);
+        } finally {
+          db.close();
+        }
+        sendJson(res, 200, { status: "ok", message: "削除しました" });
+      } catch (error) {
+        sendJson(res, 400, {
+          status: "error",
+          message: error instanceof Error ? error.message : "不正なリクエスト",
+        });
+      }
     } else if (url.pathname === "/api/report" && req.method === "GET") {
       // 最新レポート取得
       const outputDir = path.join(process.cwd(), "output");
@@ -314,6 +484,36 @@ function getDashboardHtml(): string {
       color: #555;
       line-height: 1.6;
     }
+    .field {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 8px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 1em;
+      background: #fff;
+    }
+    .ws-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid #eee;
+      font-size: 0.95em;
+    }
+    .ws-row a { color: #2980b9; word-break: break-all; }
+    .ws-del {
+      flex-shrink: 0;
+      background: #fff;
+      color: #c0392b;
+      border: 1px solid #c0392b;
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 0.9em;
+    }
     .spinner {
       display: inline-block;
       width: 16px;
@@ -349,6 +549,39 @@ function getDashboardHtml(): string {
       <a href="api/report" class="btn btn-success" style="text-align:center; text-decoration:none; display:block;">
         最新レポートを表示
       </a>
+    </div>
+
+    <div class="card">
+      <h2>➕ 助成金を手動で追加</h2>
+      <input class="field" id="agName" placeholder="助成金名（必須）">
+      <input class="field" id="agOrg" placeholder="助成元の団体名（分かれば）">
+      <input class="field" id="agUrl" type="url" placeholder="公式ページのURL（必須）">
+      <select class="field" id="agRegion">
+        <option value="全国">全国</option>
+        <option value="愛知県">愛知県</option>
+        <option value="長久手市">長久手市</option>
+      </select>
+      <button class="btn btn-primary" id="agBtn" onclick="addGrant()">追加する</button>
+      <div class="status" id="agStatus"></div>
+      <p class="info" style="margin-top:8px;">
+        追加した助成金は👍「関係あり」として扱われ、AIがその場でページを読んで
+        詳細を埋めます（少し時間がかかります）。以後は毎週の検索で
+        募集開始を自動チェックします。
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>👀 巡回サイト</h2>
+      <div id="wsList" class="info" style="margin-bottom:10px;">読み込み中...</div>
+      <input class="field" id="wsLabel" placeholder="サイト名（例: 〇〇財団 お知らせ）">
+      <input class="field" id="wsUrl" type="url" placeholder="ページのURL（必須）">
+      <button class="btn btn-primary" id="wsBtn" onclick="addSite()">巡回サイトを追加</button>
+      <div class="status" id="wsStatus"></div>
+      <p class="info" style="margin-top:8px;">
+        毎週の検索でこのページを開き、助成金らしいリンクを
+        レポートの「🔎新着・発見」に拾い上げます
+        （助成金情報のまとめページや財団のお知らせ一覧に向いています）。
+      </p>
     </div>
 
     <div class="card">
@@ -436,8 +669,116 @@ function getDashboardHtml(): string {
       if (!pollTimer) pollTimer = setInterval(poll, 5000);
     }
 
+    function showMsg(el, ok, text) {
+      el.className = 'status show ' + (ok ? 'completed' : 'error');
+      el.textContent = text;
+    }
+
+    async function addGrant() {
+      const name = document.getElementById('agName').value.trim();
+      const org = document.getElementById('agOrg').value.trim();
+      const grantUrl = document.getElementById('agUrl').value.trim();
+      const region = document.getElementById('agRegion').value;
+      const st = document.getElementById('agStatus');
+      const b = document.getElementById('agBtn');
+      if (!name || !grantUrl) {
+        showMsg(st, false, '助成金名とURLを入力してください');
+        return;
+      }
+      b.disabled = true;
+      b.textContent = 'AIが読み取り中...';
+      try {
+        const res = await fetch('api/add-grant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, organization: org, url: grantUrl, region: region })
+        });
+        const data = await res.json();
+        showMsg(st, data.status === 'ok', data.message);
+        if (data.status === 'ok') {
+          document.getElementById('agName').value = '';
+          document.getElementById('agOrg').value = '';
+          document.getElementById('agUrl').value = '';
+        }
+      } catch (e) {
+        showMsg(st, false, 'ネットワークエラーが発生しました');
+      }
+      b.disabled = false;
+      b.textContent = '追加する';
+    }
+
+    async function loadSites() {
+      const list = document.getElementById('wsList');
+      try {
+        const res = await fetch('api/watch-sites');
+        const data = await res.json();
+        if (!data.sites || data.sites.length === 0) {
+          list.textContent = '（まだ登録されていません）';
+          return;
+        }
+        list.innerHTML = '';
+        data.sites.forEach(function (s) {
+          const row = document.createElement('div');
+          row.className = 'ws-row';
+          const a = document.createElement('a');
+          a.href = s.url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = s.label;
+          const del = document.createElement('button');
+          del.className = 'ws-del';
+          del.textContent = '削除';
+          del.onclick = function () { deleteSite(s.id, s.label); };
+          row.appendChild(a);
+          row.appendChild(del);
+          list.appendChild(row);
+        });
+      } catch (e) {
+        list.textContent = '一覧を取得できませんでした';
+      }
+    }
+
+    async function addSite() {
+      const label = document.getElementById('wsLabel').value.trim();
+      const siteUrl = document.getElementById('wsUrl').value.trim();
+      const st = document.getElementById('wsStatus');
+      if (!siteUrl) {
+        showMsg(st, false, 'URLを入力してください');
+        return;
+      }
+      try {
+        const res = await fetch('api/watch-sites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: label, url: siteUrl })
+        });
+        const data = await res.json();
+        showMsg(st, data.status === 'ok', data.message);
+        if (data.status === 'ok') {
+          document.getElementById('wsLabel').value = '';
+          document.getElementById('wsUrl').value = '';
+          loadSites();
+        }
+      } catch (e) {
+        showMsg(st, false, 'ネットワークエラーが発生しました');
+      }
+    }
+
+    async function deleteSite(id, label) {
+      if (!confirm('「' + label + '」を巡回サイトから削除しますか？')) return;
+      try {
+        await fetch('api/watch-sites/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: id })
+        });
+      } catch (e) {}
+      loadSites();
+    }
+
     // ページを開いたとき、実行中なら途中から状態表示を引き継ぐ
     poll();
+    loadSites();
   </script>
 </body>
 </html>`;

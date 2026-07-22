@@ -154,13 +154,25 @@ export abstract class BaseScraper {
     return text.replace(/[\s\n\r\t]+/g, " ").trim();
   }
 
-  /** SNS・検索エンジンなど、公式サイトとして扱わないドメイン */
+  /**
+   * SNS・検索エンジン・フォームサービスなど、公式サイトとして扱わないドメイン。
+   * フォームサービス（応募フォーム）は募集内容の説明が無いため、
+   * リンク先としては募集要項のあるページを優先する。
+   */
   protected static readonly NON_OFFICIAL =
-    /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google/;
+    /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google|tayori\.com|forms\.gle|jotform\.com|formzu\.net|ssgform\.com/;
 
   /** まとめサイト等、検索フォールバックで公式サイトとして採用しないドメイン */
   protected static readonly AGGREGATOR_SITES =
     /shimisen-kyoto|canpan\.info|musubie\.org|wikipedia|note\.com|ameblo\.jp|hatenablog/;
+
+  /**
+   * プレスリリース配信サイト。公式サイトの代わりに検索上位へ出やすいが、
+   * 読み手は公式ページへ飛びたいので、リンク先としては記事内の公式リンクを
+   * 辿った先を優先する（記事自体は最後のフォールバックとして使う）。
+   */
+  protected static readonly PRESS_RELEASE_SITES =
+    /prtimes\.(jp|co\.jp)|atpress\.(jp|ne\.jp)|value-press\.com|dreamnews\.jp|digitalpr\.jp|kyodonewsprwire\.jp|pressrelease-zero\.jp/;
 
   /**
    * まとめ記事・詳細ページを開き、その中から助成元の公式サイトへのリンクを探す。
@@ -239,6 +251,8 @@ export abstract class BaseScraper {
   /**
    * 記事内に公式リンクが無い場合のフォールバック：
    * DuckDuckGo（HTML版・キー不要）で助成金名を検索し、最初のまともな結果を返す。
+   * PDF直リンクよりHTMLページを優先する（読み手が開きやすく、
+   * リンク切れにもなりにくいため）。HTMLが無ければPDFを返す。
    */
   protected async searchOfficialSite(
     query: string,
@@ -254,18 +268,23 @@ export abstract class BaseScraper {
       );
       const $ = cheerio.load(response.data);
 
-      let found: string | null = null;
+      let foundPage: string | null = null;
+      let foundPdf: string | null = null;
       $("a.result__a").each((_, el) => {
-        if (found) return;
+        if (foundPage) return;
         let href = $(el).attr("href") ?? "";
         // DDGは /l/?uddg=<エンコード済みURL> 形式のリダイレクトを挟むことがある
         const redirect = href.match(/uddg=([^&]+)/);
         if (redirect) href = decodeURIComponent(redirect[1]);
         if (!/^https?:\/\//.test(href)) return;
         if (exclude.test(href) || BaseScraper.NON_OFFICIAL.test(href)) return;
-        found = href;
+        if (/\.pdf($|[?#])/i.test(href)) {
+          if (!foundPdf) foundPdf = href;
+          return;
+        }
+        foundPage = href;
       });
-      return found;
+      return foundPage ?? foundPdf;
     } catch {
       return null;
     }

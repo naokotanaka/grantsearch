@@ -53,6 +53,13 @@ function initializeSchema(db: Database.Database): void {
       grants_found INTEGER NOT NULL DEFAULT 0,
       error TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS watch_sites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL,
+      url TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // 既存DB向けの列追加マイグレーション（列が既にあれば無視）
@@ -233,6 +240,42 @@ export function hideGrantsNotIn(db: Database.Database, ids: string[]): void {
   db.prepare(
     `UPDATE grants SET hidden = 1 WHERE id NOT IN (${placeholders})`,
   ).run(...ids);
+}
+
+/** 巡回サイト（毎週の検索でページ内の助成金リンクを拾う対象） */
+export interface WatchSite {
+  id: number;
+  label: string;
+  url: string;
+  createdAt: string;
+}
+
+export function getWatchSites(db: Database.Database): WatchSite[] {
+  const rows = db
+    .prepare("SELECT * FROM watch_sites ORDER BY id ASC")
+    .all() as any[];
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    url: row.url,
+    createdAt: row.created_at,
+  }));
+}
+
+/** 巡回サイトを追加する（同じURLが登録済みならラベルだけ更新） */
+export function addWatchSite(
+  db: Database.Database,
+  label: string,
+  url: string,
+): void {
+  db.prepare(
+    `INSERT INTO watch_sites (label, url, created_at) VALUES (?, ?, ?)
+     ON CONFLICT(url) DO UPDATE SET label = excluded.label`,
+  ).run(label, url, new Date().toISOString());
+}
+
+export function deleteWatchSite(db: Database.Database, id: number): void {
+  db.prepare("DELETE FROM watch_sites WHERE id = ?").run(id);
 }
 
 export function logSearch(

@@ -426,9 +426,9 @@ export async function enrichGrants(
             continue; // 掲載しない
           }
         }
-        result.push(applyExtraction(grant, extraction));
+        result.push(promoteIfDeadlineOpen(applyExtraction(grant, extraction)));
       } else {
-        result.push(applyHeuristics(grant, pageText));
+        result.push(promoteIfDeadlineOpen(applyHeuristics(grant, pageText)));
       }
     } catch (error) {
       console.error(
@@ -479,6 +479,60 @@ async function extractWithAI(
 /** AIが文字数上限を守らなかったときの保険（上限で切って「…」を付ける） */
 function clamp(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 締切テキスト中の最後の日付を返す（年の記載がなければ現在年とみなし、
+ * 半年以上前になる場合は翌年の意味と解釈する）。日付が無ければ null。
+ */
+function lastDeadlineDate(text: string): Date | null {
+  const matches = [
+    ...text.matchAll(/(?:令和(\d+)年|(\d{4})年)?(\d{1,2})月(\d{1,2})日/g),
+  ];
+  if (matches.length === 0) return null;
+  const m = matches[matches.length - 1];
+  const now = new Date();
+  const year = m[1]
+    ? 2018 + parseInt(m[1])
+    : m[2]
+      ? parseInt(m[2])
+      : now.getFullYear();
+  let date = new Date(year, parseInt(m[3]) - 1, parseInt(m[4]));
+  if (!m[1] && !m[2]) {
+    // 年なしの日付が半年以上前 → 翌年の意味（例: 12月に「締切: 1月20日」）
+    const halfYearAgo = new Date(now);
+    halfYearAgo.setMonth(halfYearAgo.getMonth() - 6);
+    if (date < halfYearAgo) {
+      date = new Date(year + 1, date.getMonth(), date.getDate());
+    }
+  }
+  return date;
+}
+
+/**
+ * 読み取れた締切が未来の日付（1年以内）なら「募集中」へ昇格させる。
+ * 状態を読み取れず「不明」（⚪要確認）のままの助成金が、締切だけ埋まって
+ * 要確認に居座り続けるのを防ぐ（🟢今募集中セクションへ移す）。
+ * includeUpcoming=true のとき（人間が募集要項URLを登録して読み直すとき）だけ
+ * 「募集前」も昇格対象にする。週次の一括読み取りでは対象にしない
+ * （前年から引き継いだ年なしの締切テキストで、未発表の定番助成金を
+ * 誤って募集中にしないため）。
+ */
+function promoteIfDeadlineOpen(grant: Grant, includeUpcoming = false): Grant {
+  if (
+    grant.status !== "不明" &&
+    !(includeUpcoming && grant.status === "募集前")
+  )
+    return grant;
+  const deadline = lastDeadlineDate(grant.applicationDeadline);
+  if (!deadline) return grant;
+  const now = new Date();
+  const horizon = new Date(now);
+  horizon.setMonth(horizon.getMonth() + 12); // 1年より先はノイズとみなす
+  if (deadline >= now && deadline <= horizon) {
+    return { ...grant, status: "募集中" };
+  }
+  return grant;
 }
 
 /**
@@ -563,7 +617,7 @@ export async function enrichSingleGrant(grant: Grant): Promise<Grant | null> {
     extraction.applicable = "要確認";
   }
   return {
-    ...applyExtraction(grant, extraction, true),
+    ...promoteIfDeadlineOpen(applyExtraction(grant, extraction, true), true),
     lastUpdated: new Date().toISOString(),
   };
 }

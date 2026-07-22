@@ -8,6 +8,7 @@ import { ShimisenScraper } from "./shimisen-scraper";
 import { AkaihaneScraper } from "./akaihane-scraper";
 import { AkaihaneAichiScraper } from "./akaihane-aichi-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
+import { WatchSiteScraper } from "./watch-site-scraper";
 import { getKnownGrants } from "./known-grants";
 import { checkKnownGrants, checkGrantsOpening } from "./known-grants-checker";
 import { Grant, EXCLUDE_KEYWORDS } from "../models/grant";
@@ -16,6 +17,7 @@ import {
   upsertGrants,
   logSearch,
   getAllGrants,
+  getWatchSites,
   hideGrantsNotIn,
 } from "../models/database";
 import { enrichGrants } from "../enrich/ai-enricher";
@@ -55,8 +57,13 @@ export async function searchAllSources(): Promise<Grant[]> {
     `  → ${knownGrants.length}件の定番助成金を登録（うち募集検知 ${openCount}件）`,
   );
 
-  // 2. 各Webスクレイパーの実行
+  // 2. 各Webスクレイパーの実行（人間が登録した巡回サイトがあれば加える）
   const scrapers = getAllScrapers();
+  const watchSites = getWatchSites(db);
+  if (watchSites.length > 0) {
+    console.log(`\n👀 巡回サイト ${watchSites.length}件を確認します`);
+    scrapers.push(new WatchSiteScraper(watchSites));
+  }
 
   for (const scraper of scrapers) {
     const scraperName = scraper.constructor.name;

@@ -36,13 +36,12 @@ interface Sections {
 function categorize(grants: Grant[], dismissed: Grant[] = []): Sections {
   const open = grants.filter((g) => g.status === "募集中");
   const upcoming = grants.filter((g) => g.status === "募集前");
+  // 発見系ソース（News発掘＋巡回サイト）は⚪ではなく🔎新着・発見に載せる
+  const isDiscovery = (g: Grant) => g.source === "news" || g.source === "watch";
   const discovered = grants.filter(
-    (g) =>
-      g.source === "news" && g.status !== "募集中" && g.status !== "募集前",
+    (g) => isDiscovery(g) && g.status !== "募集中" && g.status !== "募集前",
   );
-  const unknown = grants.filter(
-    (g) => g.status === "不明" && g.source !== "news",
-  );
+  const unknown = grants.filter((g) => g.status === "不明" && !isDiscovery(g));
 
   // 募集中: 締切日昇順（読み取れないものは末尾）
   open.sort((a, b) => {

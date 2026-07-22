@@ -7,3 +7,4 @@ data/
 output/
 *.db
 .env
+.playwright-mcp/
