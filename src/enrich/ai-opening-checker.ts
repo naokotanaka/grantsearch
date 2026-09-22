@@ -280,8 +280,12 @@ export async function checkOpenings(
       if (!deadline) {
         if (recentlyClosed(verdict.deadline, now)) {
           // 今年の回はもう終わっている → 「前回」の期間を今年のものに更新し、
-          // これ以上（Web検索まで）探さない
-          const period = toHalfWidthDigits(verdict.period || verdict.deadline);
+          // これ以上（Web検索まで）探さない。期間の文字列に日付が無いとき
+          // （AIが「募集は終了」のような文を返したとき）は締切だけを使う
+          const hasDate = (s: string) => /\d{1,2}月\d{1,2}日/.test(s);
+          const period = toHalfWidthDigits(
+            hasDate(verdict.period) ? verdict.period : verdict.deadline,
+          );
           closedThisYear = {
             ...grant,
             expectedPeriod: withLatestRound(grant.expectedPeriod, period),

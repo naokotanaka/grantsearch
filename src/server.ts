@@ -540,7 +540,7 @@ function getDashboardHtml(): string {
       </button>
       <div class="status" id="searchStatus"></div>
       <p class="info" style="margin-top:8px;">
-        検索には数分かかります。開始したら画面を閉じても大丈夫です
+        検索には30〜45分かかります（AIが約140ページを読むため）。開始したら画面を閉じても大丈夫です
         （毎週月曜9:00にも自動実行されます）。
       </p>
     </div>
@@ -615,7 +615,7 @@ function getDashboardHtml(): string {
       btn.disabled = true;
       btn.textContent = '検索中...';
       status.className = 'status show running';
-      status.innerHTML = '<span class="spinner"></span> 助成金情報を収集しています。数分かかります...';
+      status.innerHTML = '<span class="spinner"></span> 助成金情報を収集しています。30〜45分かかります（画面を閉じても続きます）...';
     }
 
     function showIdle(last) {

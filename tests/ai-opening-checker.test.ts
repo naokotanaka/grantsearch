@@ -195,6 +195,16 @@ describe("checkOpenings", () => {
     expect(stats.promoted).toBe(0);
   });
 
+  it("今年の回が終了で、期間の文字列に日付が無ければ締切だけを前回として保存する", async () => {
+    const { grants } = await checkOpenings([base()], {
+      judge: async () => yes("2026年6月30日", "（募集は終了。募集締切をもとに判断）"),
+      fetchText: async () => "本文",
+      search: async () => [],
+      now: NOW,
+    });
+    expect(grants[0].expectedPeriod).toBe("例年9月〜10月頃（前回: 2026年6月30日）");
+  });
+
   it("例年の募集月がまだ先の行は、公式ページは読むが Web 検索はしない", async () => {
     let searched = 0;
     const far = grant({ ...base(), expectedPeriod: "例年2月〜3月頃" }); // 今は9月
