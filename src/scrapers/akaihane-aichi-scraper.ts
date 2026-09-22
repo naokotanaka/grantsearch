@@ -58,24 +58,66 @@ export class AkaihaneAichiScraper extends BaseScraper {
     });
 
     // 2. 表の外の案内リンク（CBCチャリティ募金・つながり等の申請ページ）
+    // 同じURLへのリンクが複数ある（ナビゲーションの文字リンクと、表を含む
+    // 「募集中」ブロック）ため、先に全部集めてから、事業費名＋受付期間の
+    // 揃ったブロックを優先して処理する
+    interface LinkCandidate {
+      url: string;
+      text: string;
+      names: string[];
+      period: string;
+    }
+    const candidates: LinkCandidate[] = [];
     $(
       '#contents a[href*="/pages/"], main a[href*="/pages/"], .maincontents a[href*="/pages/"], body a[href*="/pages/"]',
     ).each((_, el) => {
+      const href = $(el).attr("href") ?? "";
+      const url = this.resolveUrl(href);
+      if (url === this.hubUrl) return;
+      const text = this.cleanText($(el).text());
+      // 助成・配分の案内らしいリンクだけ（ナビゲーション・様式ダウンロードは除外）
+      if (text.length < 15) return;
+      if (!/配分|助成|事業費|補助/.test(text)) return;
+      if (/様式|配分決定|ロゴマーク/.test(text)) return;
+
+      // ｢CBCチャリティ募金 …事業費｣「こども食サポート…事業費」のように
+      // 括弧で囲まれた事業費名と、受付期間（全角数字あり）を取り出す
+      const names = Array.from(
+        text.matchAll(/[｢「]([^｣」]{5,60})[｣」]/g),
+        (m) => this.cleanText(m[1]),
+      );
+      // 例「令和8年9月14日～10月19日（必着）」。末尾の括弧書きまでで止める
+      // （後ろに「詳細はこちら」などのリンク文言が続くため）
+      const periodMatch = this.toHalfWidthDigits(text).match(
+        /令和\d+年\d{1,2}月\d{1,2}日[^\s｢「｣」（(]*(?:[（(][^）)]*[）)])?/,
+      );
+      candidates.push({
+        url,
+        text,
+        names,
+        period: names.length > 0 && periodMatch ? periodMatch[0] : "",
+      });
+    });
+
+    const rich = (c: LinkCandidate) => (c.period ? 1 : 0);
+    for (const c of candidates.sort((a, b) => rich(b) - rich(a))) {
       try {
-        const href = $(el).attr("href") ?? "";
-        const url = this.resolveUrl(href);
-        if (seenUrls.has(url) || url === this.hubUrl) return;
-        const text = this.cleanText($(el).text());
-        // 助成・配分の案内らしいリンクだけ（ナビゲーション・様式ダウンロードは除外）
-        if (text.length < 15) return;
-        if (!/配分|助成|事業費|補助/.test(text)) return;
-        if (/様式|配分決定|ロゴマーク/.test(text)) return;
-        seenUrls.add(url);
-        grants.push(this.buildGrant(text.slice(0, 60), "", "", text, url, now));
+        if (seenUrls.has(c.url)) continue;
+        seenUrls.add(c.url);
+        if (c.period) {
+          // 表を含む「募集中」ブロック → 事業費ごとに受付期間付きで登録
+          for (const name of c.names) {
+            grants.push(this.buildGrant(name, "", "", c.period, c.url, now));
+          }
+        } else {
+          grants.push(
+            this.buildGrant(c.text.slice(0, 60), "", "", c.text, c.url, now),
+          );
+        }
       } catch {
         // 個別の解析エラーはスキップ
       }
-    });
+    }
 
     if (grants.length === 0) {
       console.error(
@@ -103,10 +145,12 @@ export class AkaihaneAichiScraper extends BaseScraper {
     name: string,
     target: string,
     description: string,
-    period: string,
+    rawPeriod: string,
     url: string,
     now: Date,
   ): Grant {
+    // 受付期間は全角数字で書かれることがある（例「令和８年９月14日～10月19日」）
+    const period = this.toHalfWidthDigits(rawPeriod);
     const start = this.parseJapaneseDate(period);
     let end: Date | null = null;
     if (start) {

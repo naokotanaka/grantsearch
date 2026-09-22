@@ -35,6 +35,7 @@ gate で保護）。常駐プロセスが週次自動検索（毎週月曜 9:00 
 | ----------------------------------- | --------------------------------------------------------------------------- |
 | `npm run build`                     | TypeScript をコンパイル（`src/` → `dist/`、`tsc`）                          |
 | `npm run dev`                       | `ts-node` で `src/index.ts` を直接実行（ビルド不要）                        |
+| `npm test`                          | Vitest で `tests/*.test.ts` を実行                                          |
 | `npm run search`                    | 全ソースをスクレイピングし、DB 保存＋レポート生成（`dist/index.js search`） |
 | `npm run report`                    | スクレイピングせず既存 DB データからレポートを再生成                        |
 | `npm run server`                    | Web ダッシュボード＋週次スケジューラを起動（`PORT`・`HOST` で変更可）       |
@@ -49,8 +50,10 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 （`search` | `report` | `server` | `schedule` | `help`）で処理を振り分け、
 デフォルトは `search` です。
 
-現時点で **テストランナーもリンターも設定されていません**。変更の確認は
-`npm run build` と該当コマンドの実行で行ってください。
+テストは **Vitest**（`npm test`、`tests/*.test.ts`）。スクレイパーの解析は
+`tests/fixtures/` に置いた実HTMLに対して検証します（`fetchPage` をサブクラスで
+差し替える）。リンターは未設定。変更の確認は `npm test` と `npm run build` で
+行ってください。
 
 ## アーキテクチャとデータフロー
 

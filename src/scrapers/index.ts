@@ -298,16 +298,18 @@ export function dedupeAcrossSources(
     return stripped.length <= 2;
   };
 
-  // 情報の充実度（大きいほど優先して残す）。人間の入力（👍・📎・メモ）の
-  // 付いた行は必ず代表として残す（畳まれる側になると入力が見えなくなるため）
+  // どの行を代表として残すか（大きいほど優先）。人間の入力（👍・📎・メモ）の
+  // 付いた行と、定番リスト（id・名前が手書きで安定）の行は代表として残す。
+  // 新しい回の情報は adoptNewerRound で代表に取り込むので、募集中かどうかは
+  // 代表選びでは二の次でよい
   const score = (g: Grant): number =>
     (g.humanJudgment === "関係あり" ? 200 : 0) +
+    (g.source === "known" ? 150 : 0) +
     (g.manualUrl ? 60 : 0) +
     (g.memo ? 30 : 0) +
     (g.status === "募集中" ? 100 : 0) +
     (g.expectedPeriod.includes("発表済み") ? 50 : 0) +
     (g.expectedPeriod.includes("昨年実績") ? 20 : 0) +
-    (g.source === "known" ? 15 : 0) +
     (g.targetProjects ? 10 : 0) +
     (g.grantAmount !== "要確認" ? 5 : 0);
 
@@ -358,13 +360,69 @@ export function dedupeAcrossSources(
     if (!dupOf) {
       kept.push({ grant, norm, orgNorm });
       if (isProtected(grant)) protectedIds?.add(grant.id);
-    } else if (isProtected(grant)) {
-      // 畳まれる側が定番・関係ありなら、残る代表に保護を引き継ぐ
-      protectedIds?.add(dupOf.grant.id);
+    } else {
+      if (isProtected(grant)) {
+        // 畳まれる側が定番・関係ありなら、残る代表に保護を引き継ぐ
+        protectedIds?.add(dupOf.grant.id);
+      }
+      // 捨てる側が新しい回（新年度の募集）なら、その回の情報を代表に取り込む。
+      // これをしないと、👍の付いた旧年度の行が代表に残り、募集中の新年度が
+      // 消えてレポートに「未発表」と出続ける（2026-09 未来応援ネットワーク事業）
+      const keptName = dupOf.grant.name.slice(0, 40);
+      if (adoptNewerRound(dupOf.grant, grant)) {
+        console.log(
+          `  ↻ 新しい回を取り込み: ${keptName} ← ${grant.name.slice(0, 40)}`,
+        );
+      }
     }
   }
 
   return kept.map((k) => k.grant);
+}
+
+/** 回の日付（募集中なら締切、それ以外は前回の募集期間の最後の年付き日付） */
+function roundDate(g: Grant): Date | null {
+  if (g.status === "募集中") return lastDeadlineDate(g.applicationDeadline);
+  return (
+    lastDeadlineDate(g.expectedPeriod) ??
+    lastDeadlineDate(g.applicationDeadline)
+  );
+}
+
+/**
+ * 捨てる側（folded）が残す側（kept）より新しい回なら、回の情報を kept に取り込む。
+ * 取り込むのは状態・締切・前回期間・URL・名前と、kept が空の詳細項目。
+ * id・メモ・手動URL・判定・情報源は変えない。取り込んだら true。
+ */
+function adoptNewerRound(kept: Grant, folded: Grant): boolean {
+  const keptOpen = kept.status === "募集中";
+  const foldedOpen = folded.status === "募集中";
+  const keptDate = roundDate(kept);
+  const foldedDate = roundDate(folded);
+  const newer =
+    (foldedOpen && !keptOpen) ||
+    (foldedOpen === keptOpen &&
+      foldedDate !== null &&
+      (keptDate === null || foldedDate > keptDate));
+  if (!newer) return false;
+
+  kept.status = folded.status;
+  kept.applicationDeadline = folded.applicationDeadline;
+  if (folded.expectedPeriod) kept.expectedPeriod = folded.expectedPeriod;
+  if (folded.url) kept.url = folded.url;
+  // 定番・手動登録の名前は人が付けた安定名なので変えない
+  if (kept.source !== "known" && kept.source !== "manual") {
+    kept.name = folded.name;
+  }
+  const blank = (v: string) =>
+    !v || v === "要確認" || v === "不明" || v.startsWith("要確認");
+  if (blank(kept.grantAmount) && !blank(folded.grantAmount))
+    kept.grantAmount = folded.grantAmount;
+  if (blank(kept.grantPeriod) && !blank(folded.grantPeriod))
+    kept.grantPeriod = folded.grantPeriod;
+  if (blank(kept.targetProjects) && !blank(folded.targetProjects))
+    kept.targetProjects = folded.targetProjects;
+  return true;
 }
 
 /** 法人格の表記（団体名の比較時に無視する） */

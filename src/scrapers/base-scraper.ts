@@ -115,7 +115,15 @@ export abstract class BaseScraper {
     return "不明";
   }
 
-  protected parseJapaneseDate(text: string): Date | null {
+  /** 全角数字を半角にする（「令和８年９月14日」のような表記の日付解析用） */
+  protected toHalfWidthDigits(text: string): string {
+    return text.replace(/[０-９]/g, (c) =>
+      String.fromCharCode(c.charCodeAt(0) - 0xfee0),
+    );
+  }
+
+  protected parseJapaneseDate(rawText: string): Date | null {
+    const text = this.toHalfWidthDigits(rawText);
     // 令和X年Y月Z日 形式
     const reiwaMatch = text.match(/令和(\d+)年(\d+)月(\d+)日/);
     if (reiwaMatch) {
