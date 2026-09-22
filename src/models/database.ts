@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import { Grant, HumanJudgment } from "./grant";
+import { Grant, GrantAlias, HumanJudgment } from "./grant";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "grants.db");
@@ -54,6 +54,16 @@ function initializeSchema(db: Database.Database): void {
       error TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_at TEXT NOT NULL,
+      kept_id TEXT NOT NULL,
+      kept_name TEXT NOT NULL,
+      folded_name TEXT NOT NULL,
+      folded_source TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE TABLE IF NOT EXISTS watch_sites (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       label TEXT NOT NULL,
@@ -70,6 +80,7 @@ function initializeSchema(db: Database.Database): void {
     "ALTER TABLE grants ADD COLUMN manual_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE grants ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE grants ADD COLUMN human_judgment TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE grants ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'",
   ];
   for (const sql of migrations) {
     try {
@@ -87,11 +98,14 @@ export function upsertGrant(db: Database.Database, grant: Grant): void {
   const stmt = db.prepare(`
     INSERT INTO grants (id, name, organization, region, target_projects, grant_amount,
       grant_period, application_deadline, expected_period, personnel_costs, honorarium, rent,
-      status, url, source, last_updated, benefit_type, memo, manual_url, hidden, human_judgment)
+      status, url, source, last_updated, benefit_type, memo, manual_url, hidden, human_judgment,
+      aliases)
     VALUES (@id, @name, @organization, @region, @targetProjects, @grantAmount,
       @grantPeriod, @applicationDeadline, @expectedPeriod, @personnelCosts, @honorarium, @rent,
-      @status, @url, @source, @lastUpdated, @benefitType, @memo, @manualUrl, 0, @humanJudgment)
+      @status, @url, @source, @lastUpdated, @benefitType, @memo, @manualUrl, 0, @humanJudgment,
+      @aliases)
     ON CONFLICT(id) DO UPDATE SET
+      aliases = @aliases,
       name = @name,
       organization = @organization,
       region = @region,
@@ -110,7 +124,7 @@ export function upsertGrant(db: Database.Database, grant: Grant): void {
       benefit_type = @benefitType,
       hidden = 0
   `);
-  stmt.run(grant);
+  stmt.run({ ...grant, aliases: JSON.stringify(grant.aliases ?? []) });
 }
 
 export function upsertGrants(db: Database.Database, grants: Grant[]): void {
@@ -311,5 +325,59 @@ function rowToGrant(row: any): Grant {
     memo: row.memo ?? "",
     manualUrl: row.manual_url ?? "",
     humanJudgment: row.human_judgment ?? "",
+    aliases: parseAliases(row.aliases),
   };
+}
+
+function parseAliases(raw: unknown): GrantAlias[] {
+  if (typeof raw !== "string" || !raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 同一と判定してまとめた組の記録（1回の検索実行分） */
+export interface MergeRecord {
+  keptId: string;
+  keptName: string;
+  foldedName: string;
+  foldedSource: string;
+  reason: string;
+}
+
+/** まとめた組を記録する（run_at は検索実行の開始時刻で揃える） */
+export function logMerges(
+  db: Database.Database,
+  runAt: string,
+  merges: MergeRecord[],
+): void {
+  const stmt = db.prepare(
+    "INSERT INTO merge_log (run_at, kept_id, kept_name, folded_name, folded_source, reason) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  const insertMany = db.transaction((items: MergeRecord[]) => {
+    for (const m of items) {
+      stmt.run(runAt, m.keptId, m.keptName, m.foldedName, m.foldedSource, m.reason);
+    }
+  });
+  insertMany(merges);
+}
+
+/** 直近の検索実行でまとめた組（レポート下部の確認用） */
+export function getLatestMerges(db: Database.Database): MergeRecord[] {
+  const rows = db
+    .prepare(
+      `SELECT kept_id, kept_name, folded_name, folded_source, reason FROM merge_log
+       WHERE run_at = (SELECT MAX(run_at) FROM merge_log) ORDER BY id`,
+    )
+    .all() as any[];
+  return rows.map((r) => ({
+    keptId: r.kept_id,
+    keptName: r.kept_name,
+    foldedName: r.folded_name,
+    foldedSource: r.folded_source,
+    reason: r.reason ?? "",
+  }));
 }

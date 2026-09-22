@@ -6,6 +6,8 @@ import {
   getDatabase,
   getVisibleGrants,
   getGrantsByJudgment,
+  getLatestMerges,
+  MergeRecord,
 } from "../models/database";
 
 const OUTPUT_DIR = path.join(process.cwd(), "output");
@@ -31,6 +33,8 @@ interface Sections {
   unknown: Grant[];
   /** 人間が「関係ない」と判定したもの（HTMLの折りたたみに表示、戻すボタン付き） */
   dismissed: Grant[];
+  /** 直近の検索で同じプログラムとしてまとめた組（誤ってまとめたことに気づくための表示） */
+  merges?: MergeRecord[];
 }
 
 function categorize(grants: Grant[], dismissed: Grant[] = []): Sections {
@@ -181,6 +185,7 @@ export function generateAllReports(): void {
   const db = getDatabase();
   const data = getVisibleGrants(db);
   const dismissed = getGrantsByJudgment(db, "関係ない");
+  const merges = getLatestMerges(db);
   db.close();
 
   if (data.length === 0) {
@@ -192,7 +197,7 @@ export function generateAllReports(): void {
 
   ensureOutputDir();
   const timestamp = dayjs().format("YYYY-MM-DD");
-  const sections = categorize(data, dismissed);
+  const sections = { ...categorize(data, dismissed), merges };
 
   generateMarkdownReport(sections, timestamp);
   generateHtmlReport(sections, timestamp);
@@ -323,6 +328,18 @@ function generateMarkdownReport(sections: Sections, timestamp: string): void {
     );
   }
   lines.push("");
+
+  const merges = sections.merges ?? [];
+  if (merges.length > 0) {
+    lines.push(`### 🧩 今回同じ助成金としてまとめた行（${merges.length}件）`);
+    lines.push("");
+    for (const m of merges) {
+      lines.push(
+        `- ${m.keptName} ← ${m.foldedName}（${m.foldedSource}）: ${m.reason}`,
+      );
+    }
+    lines.push("");
+  }
 
   lines.push("---");
   lines.push("");
@@ -545,6 +562,29 @@ function generateHtmlReport(sections: Sections, timestamp: string): void {
           <td>${htmlName(g)}</td>
           <td>${escapeHtml(g.organization)}</td>
           <td class="memo-cell" data-id="${escapeHtml(g.id)}"><button type="button" class="restore-btn">戻す</button></td>
+        </tr>\n`;
+    }
+    html += `        </tbody>
+      </table>
+    </details>
+`;
+  }
+
+  // 6. 直近の検索でまとめた組（誤ってまとめたことに気づくための確認用）
+  const merges = sections.merges ?? [];
+  if (merges.length > 0) {
+    html += `
+    <details class="dismissed">
+      <summary>🧩 今回同じ助成金としてまとめた行（${merges.length}件）— 別の助成金が混ざっていたら教えてください</summary>
+      <table>
+        <thead><tr><th>残した行</th><th>まとめた行</th><th>理由</th></tr></thead>
+        <tbody>
+`;
+    for (const m of merges) {
+      html += `        <tr>
+          <td>${escapeHtml(m.keptName)}</td>
+          <td>${escapeHtml(m.foldedName)}<span class="region-tag">${escapeHtml(m.foldedSource)}</span></td>
+          <td>${escapeHtml(m.reason)}</td>
         </tr>\n`;
     }
     html += `        </tbody>

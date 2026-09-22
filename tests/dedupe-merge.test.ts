@@ -1,31 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { dedupeAcrossSources } from "../src/scrapers/index";
-import { Grant } from "../src/models/grant";
-
-/** テスト用の Grant（未指定の項目は既定値） */
-function grant(partial: Partial<Grant> & { id: string; name: string }): Grant {
-  return {
-    organization: "テスト財団",
-    region: "全国",
-    targetProjects: "",
-    grantAmount: "要確認",
-    grantPeriod: "要確認",
-    applicationDeadline: "要確認",
-    expectedPeriod: "",
-    personnelCosts: "不明",
-    honorarium: "不明",
-    rent: "不明",
-    benefitType: "不明",
-    status: "不明",
-    url: "",
-    source: "aichi_vc",
-    lastUpdated: "2026-09-21T00:00:00.000Z",
-    memo: "",
-    manualUrl: "",
-    humanJudgment: "",
-    ...partial,
-  };
-}
+import { dedupeAcrossSources } from "../src/scrapers/dedupe";
+import { grant } from "./helpers";
 
 describe("dedupeAcrossSources: 捨てる側の新しい回を残す側に取り込む", () => {
   it("👍の旧年度行に、募集中の新年度行の状態・締切・URL・名前を取り込む", () => {

@@ -266,6 +266,7 @@ export function startServer(): void {
           memo: "",
           manualUrl: "",
           humanJudgment: "",
+          aliases: [],
         };
         const db = getDatabase();
         try {

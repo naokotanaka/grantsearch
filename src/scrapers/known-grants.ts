@@ -10,10 +10,10 @@ import { Grant } from "../models/grant";
  * 検出できた場合は '募集中'＋実際の期間 に自動昇格する。
  * 募集要項が大きく変わったら手動で更新すること。
  */
-/** カタログ記述用（memo・manualUrl・humanJudgment・benefitType は登録時に共通デフォルトを補完する） */
+/** カタログ記述用（memo・manualUrl・humanJudgment・benefitType・aliases は登録時に共通デフォルトを補完する） */
 type KnownGrantEntry = Omit<
   Grant,
-  "memo" | "manualUrl" | "humanJudgment" | "benefitType"
+  "memo" | "manualUrl" | "humanJudgment" | "benefitType" | "aliases"
 >;
 
 export function getKnownGrants(): Grant[] {
@@ -259,5 +259,6 @@ export function getKnownGrants(): Grant[] {
     memo: "",
     manualUrl: "",
     humanJudgment: "" as const,
+    aliases: [],
   }));
 }

@@ -74,8 +74,17 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
      捕捉して 1 つの失敗が全体を止めないようにします。**抽出0件は解析不全の
      可能性が高いため警告ログ＋`search_log` に記録**します（沈黙故障の検知）。
    - すべての結果を SQLite に upsert し、`search_log` に 1 行記録します。
-   - `Grant.id` で重複除去後、`dedupeAcrossSources()` が**情報源をまたいだ同一助成金**
-     （正規化名の包含・13文字以上の共通部分）を畳み、情報の充実した方を残します。
+   - `Grant.id` で重複除去後、**`matchPrograms()`（`src/enrich/ai-matcher.ts`）が
+     同じ助成金（プログラム）を指す行を1行にまとめます**。判定は3層：①既存行の
+     別名一覧（`aliases`）との一致 → ②文字列規則・助成元の類似で候補をひとかたまりに
+     → ③かたまりごとに Claude（`CLAUDE_MATCH_MODEL`、既定 `claude-sonnet-5`）が
+     「どれとどれが同じプログラムか」を判定。判定結果は別名一覧に残し、次回以降は
+     AIを呼びません。APIキー未設定時は文字列規則だけ（`dedupeAcrossSources()`、
+     `src/scrapers/dedupe.ts`）でまとめます。
+     **まとめるときは、捨てる側が新しい回（新年度の募集）なら、その状態・締切・URL・
+     名前を代表に取り込みます**（`adoptNewerRound`）。代表は👍・定番・DBにあった行を
+     優先し、id を維持します。まとめた組は `merge_log` に記録し、レポート下部に
+     「今回まとめた行」として表示します（誤ってまとめたことに気づくため）。
    - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外し、
      **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページ＋
      リンクされた募集要項PDF（最大2件）を読んで詳細情報を充填します
@@ -129,7 +138,12 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 - `src/scrapers/shimisen-scraper.ts` — しみせん（京都市市民活動総合センター）の助成
   情報まとめ。京都限定は除外し全国応募可のものを採用。
 - `src/scrapers/index.ts` — `getAllScrapers()` でスクレイパーを登録し、全体を統括。
-  `dedupeAcrossSources()`（情報源をまたぐ重複の畳み込み）もここにあります。
+- `src/scrapers/dedupe.ts` — 同じ助成金をまとめるための補助（文字列規則
+  `isSameByRules`、代表の選び方 `representativeScore`、新しい回の取り込み
+  `adoptNewerRound`、AI無しの経路 `dedupeAcrossSources`）。
+- `src/enrich/ai-matcher.ts` — プログラム単位のまとめ（別名一致 → 候補の絞り込み →
+  AI判定）。`matchPrograms()` を `searchAllSources` が呼びます。判定関数 `Judge` を
+  差し替えられるので、テストでは固定応答を渡します。
 - `src/enrich/ai-enricher.ts` — 公式ページ読み取りによる詳細情報の充填
   （AIエンリッチメント）。下記の専用セクション参照。
 - `src/reports/report-generator.ts` — Markdown / HTML / コンソールのレポート描画。
@@ -158,7 +172,11 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 `id`、`name`、`organization`、`region`、`targetProjects`、`grantAmount`、
 `grantPeriod`、`applicationDeadline`、`expectedPeriod`、`personnelCosts`、
 `honorarium`、`rent`、`benefitType`、`status`、`url`、`source`、`lastUpdated`、
-`memo`、`manualUrl`、`humanJudgment`。
+`memo`、`manualUrl`、`humanJudgment`、`aliases`。
+
+`aliases` は、この行（プログラム）と同一と判定された他の行の名前・助成元・元 id の
+一覧（DBでは JSON 文字列）。システムが書き、次回以降のまとめでAIを呼ばずに
+同じプログラムと判定するために使います。
 
 **`memo`（人間のメモ）、`manualUrl`（人間が登録した募集要項URL）、
 `humanJudgment`（人間の判定 `'' | '関係あり' | '関係ない'`）は人間の入力**です。
@@ -207,6 +225,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 - **APIキー**：環境変数 `ANTHROPIC_API_KEY`（本番はサーバーの `.env` に設定）。
   **未設定でも壊れず**、ルールベースの簡易抽出（正規表現）にフォールバックします。
 - **モデル**：既定 `claude-haiku-4-5`（低コスト）。環境変数 `CLAUDE_MODEL` で上書き可。
+  同一判定（`ai-matcher.ts`）は呼び出し回数が少なく判断の質を優先するため、別の
+  環境変数 `CLAUDE_MATCH_MODEL`（既定 `claude-sonnet-5`）で指定します。
 - **安全弁**：1回の実行で読むページは最大150件（`MAX_PAGES`）、本文は8,000字まで。
   ページ取得失敗・AI呼び出し失敗時はその助成金を**そのまま掲載**します（消さない）。
 - **上書きしない**：スクレイパーが既に良い値を持つ項目（`要確認`/`不明` 以外）は

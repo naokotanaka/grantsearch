@@ -62,6 +62,7 @@ export abstract class BaseScraper {
       memo: partial.memo ?? "",
       manualUrl: partial.manualUrl ?? "",
       humanJudgment: partial.humanJudgment ?? "",
+      aliases: partial.aliases ?? [],
     };
   }
 

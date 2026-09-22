@@ -107,6 +107,20 @@ export interface Grant {
    * 再検索・AI読み取りでは一切上書きされない。
    */
   humanJudgment: HumanJudgment;
+
+  /**
+   * 別名一覧。この行（プログラム）と同一と判定された他の行の名前・助成元・元id。
+   * 次回以降の検索では、ここに一致する候補はAIを呼ばずにこの行の回として扱う。
+   */
+  aliases: GrantAlias[];
+}
+
+/** 同一と判定された行の記録（別名一覧の要素） */
+export interface GrantAlias {
+  name: string;
+  organization: string;
+  /** 情報源が付けた元の id */
+  id: string;
 }
 
 /** スクレイパーの設定 */
