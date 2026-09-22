@@ -31,6 +31,7 @@ import {
 import { enrichGrants } from "../enrich/ai-enricher";
 import { createAiJudge, matchPrograms } from "../enrich/ai-matcher";
 import { lastDeadlineDate, normalizeOrgName } from "./dedupe";
+import { isOtherMunicipality } from "./scope-rules";
 
 /** 全スクレイパーの一覧 */
 function getAllScrapers(): BaseScraper[] {
@@ -177,9 +178,19 @@ export async function searchAllSources(): Promise<Grant[]> {
     if (g.humanJudgment === "関係あり") return true;
     const text = g.name + g.targetProjects;
     const hit = EXCLUDE_KEYWORDS.find((kw) => text.includes(kw));
-    if (hit)
+    if (hit) {
       console.log(`  ✗ 分野外のため除外: ${g.name.slice(0, 40)}（${hit}）`);
-    return !hit;
+      return false;
+    }
+    // 長久手市以外の市区町村（役所・社協）の助成は、その市区町村の団体限定なので
+    // 掲載しない（ページに書いていなくても。AIが「要確認」を返して残るのを防ぐ）
+    if (isOtherMunicipality(g.organization)) {
+      console.log(
+        `  ✗ 他の市区町村の助成のため除外: ${g.name.slice(0, 40)}（${g.organization}）`,
+      );
+      return false;
+    }
+    return true;
   });
 
   // 「関係ない」判定済みはここで除外（AI読み取りの枠も使わない）。
