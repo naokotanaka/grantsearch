@@ -109,7 +109,9 @@ export async function searchAllSources(): Promise<Grant[]> {
   // 再発見されたときも2行にならず1行に畳まれる
   for (const s of stored.values()) {
     if (s.humanJudgment === "関係あり" && !uniqueGrants.has(s.id)) {
-      uniqueGrants.set(s.id, s);
+      // stored と同じオブジェクトを使うと、まとめる処理で引き継いだ人間の入力が
+      // 「変更なし」と判定されてDBに書かれないため、複製して渡す
+      uniqueGrants.set(s.id, { ...s, aliases: s.aliases.slice() });
     }
   }
 
