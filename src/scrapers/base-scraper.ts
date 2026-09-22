@@ -168,7 +168,7 @@ export abstract class BaseScraper {
    * フォームサービス（応募フォーム）は募集内容の説明が無いため、
    * リンク先としては募集要項のあるページを優先する。
    */
-  protected static readonly NON_OFFICIAL =
+  static readonly NON_OFFICIAL =
     /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google|tayori\.com|forms\.gle|jotform\.com|formzu\.net|ssgform\.com/;
 
   /** まとめサイト等、検索フォールバックで公式サイトとして採用しないドメイン */

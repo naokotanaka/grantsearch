@@ -197,7 +197,7 @@ export class AkaihaneAichiScraper extends BaseScraper {
         organization: "愛知県共同募金会",
         targetProjects,
         applicationDeadline: "未発表",
-        expectedPeriod: `例年${start.getMonth() + 1}月〜${end.getMonth() + 1}月頃（昨年実績: ${period}）`,
+        expectedPeriod: `例年${start.getMonth() + 1}月〜${end.getMonth() + 1}月頃（前回: ${period}）`,
         url,
         status: "募集前",
       });

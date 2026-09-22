@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import { BaseScraper } from "./base-scraper";
 import { Grant, Region } from "../models/grant";
 import { extractGrantNamesFromTitles } from "../enrich/ai-enricher";
+import { searchWeb } from "./web-search";
 
 /**
  * Web横断検索による助成金発見スクレイパー
@@ -276,36 +277,7 @@ export class NewsDiscoveryScraper extends BaseScraper {
   private async searchWebReports(
     query: string,
   ): Promise<{ title: string; url: string; snippet: string }[]> {
-    const response = await this.client.get(
-      "https://html.duckduckgo.com/html/",
-      {
-        params: { q: query, kl: "jp-jp" },
-        responseType: "text",
-      },
-    );
-    const $ = cheerio.load(response.data);
-    const results: { title: string; url: string; snippet: string }[] = [];
-    $(".result").each((_, el) => {
-      const $el = $(el);
-      const $a = $el.find("a.result__a").first();
-      const title = this.cleanText($a.text());
-      let href = $a.attr("href") ?? "";
-      // DDGは /l/?uddg=<エンコード済みURL> 形式のリダイレクトを挟むことがある
-      const redirect = href.match(/uddg=([^&]+)/);
-      if (redirect) href = decodeURIComponent(redirect[1]);
-      if (!title || !/^https?:\/\//.test(href)) return;
-      if (BaseScraper.NON_OFFICIAL.test(href)) return;
-      const snippet = this.cleanText(
-        $el.find(".result__snippet").first().text(),
-      );
-      results.push({ title, url: href, snippet: snippet.slice(0, 150) });
-    });
-    if (results.length === 0) {
-      console.warn(
-        `[News発見] Web検索「${query}」が0件でした（DuckDuckGoの形式変更・一時ブロックの可能性）`,
-      );
-    }
-    return results;
+    return searchWeb(query, "News発見");
   }
 
   /** RSS（XML）を解析して助成金告知らしき記事を抽出 */

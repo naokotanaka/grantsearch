@@ -227,7 +227,7 @@ export class AichiVcScraper extends BaseScraper {
     const dates = [
       ...lastPeriod.matchAll(/(?:令和\d+年|\d{4}年)(\d{1,2})月\d{1,2}日/g),
     ];
-    if (dates.length === 0) return `時期不明（昨年実績: ${lastPeriod}）`;
+    if (dates.length === 0) return `時期不明（前回: ${lastPeriod}）`;
 
     const startMonth = parseInt(dates[0][1], 10);
     const endMonth = parseInt(dates[dates.length - 1][1], 10);
@@ -235,7 +235,7 @@ export class AichiVcScraper extends BaseScraper {
       startMonth === endMonth
         ? `例年${startMonth}月頃`
         : `例年${startMonth}月〜${endMonth}月頃`;
-    return `${monthLabel}（昨年実績: ${lastPeriod}）`;
+    return `${monthLabel}（前回: ${lastPeriod}）`;
   }
 
   /** 期間文字列の最後に現れる日付（＝締切側）を返す */

@@ -68,8 +68,7 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 ```
 
 1. **`searchAllSources()`**（`src/scrapers/index.ts`）が全体を統括します。
-   - まず `checkKnownGrants()`（known-grants-checker）が定番リストの各公式ページを
-     フェッチし、今年度の募集告知を検知したエントリを「募集中＋実締切」へ自動昇格させます。
+   - まず定番リスト（`getKnownGrants()`）を候補に加えます（ページは読みません）。
    - `getAllScrapers()` の各スクレイパーを順次実行し、スクレイパーごとに例外を
      捕捉して 1 つの失敗が全体を止めないようにします。**抽出0件は解析不全の
      可能性が高いため警告ログ＋`search_log` に記録**します（沈黙故障の検知）。
@@ -85,8 +84,16 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
      名前を代表に取り込みます**（`adoptNewerRound`）。代表は👍・定番・DBにあった行を
      優先し、id を維持します。まとめた組は `merge_log` に記録し、レポート下部に
      「今回まとめた行」として表示します（誤ってまとめたことに気づくため）。
-   - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外し、
-     **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページ＋
+   - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外します。
+   - **募集開始チェック（`src/enrich/ai-opening-checker.ts` の `checkOpenings()`）**：
+     募集前の全プログラム（＋👍で募集中でない行）について、手動URL・前回のURL・その
+     1段上のページを読み、Claude（`CLAUDE_MATCH_MODEL`）に「新しい回の募集告知が
+     あるか」を判定させます。見つからなければ Web 検索（DuckDuckGo、
+     `src/scrapers/web-search.ts`）で候補ページを探して同じ判定をします。AIの締切が
+     「未来かつ1年以内」のときだけ「募集中」へ昇格します。上限は1回の実行で
+     ページ取得80回・検索30回、3件並列。APIキー未設定時は従来の正規表現検知
+     （`known-grants-checker.ts`、定番・👍のみ）に戻ります。
+   - **`enrichGrants()`（`src/enrich/ai-enricher.ts`）** が各助成金の公式ページ＋
      リンクされた募集要項PDF（最大2件）を読んで詳細情報を充填します
      （下記「AIエンリッチメント」参照）。
    - **最後に、確定した最終リストをDBへ再upsertし、リストに入らなかった行を
@@ -122,8 +129,12 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   `search(): Promise<Grant[]>` を実装します。
 - `src/scrapers/known-grants.ts` — 毎年恒例の定番助成金カタログ（status `募集前`＋
   `expectedPeriod` の例年時期）。募集要項が変わったら手動で更新します。
-- `src/scrapers/known-grants-checker.ts` — 定番リストの各公式ページを毎週フェッチし、
-  「締切/募集期間」語の近くの未来日付を検知したら `募集中` に自動昇格させます。
+- `src/scrapers/known-grants-checker.ts` — 正規表現による募集検知（「締切/募集期間」語の
+  近くの未来日付）。**APIキー未設定時のフォールバック**としてだけ使います。
+- `src/enrich/ai-opening-checker.ts` — 募集開始チェックのAI版（上記）。判定関数
+  `OpeningJudge`・ページ取得・Web検索を差し替えられるので、テストは固定応答で行います。
+- `src/scrapers/web-search.ts` — DuckDuckGo（HTML版・キー不要）による Web 検索。
+  発掘（news-discovery）と募集開始チェックで共用。
 - `src/scrapers/news-discovery-scraper.ts` — Web横断検索によるマイナー助成金の発掘
   （レポートの🔎セクションに掲載）。Google News RSS（募集告知60日以内・上限20件＋
   採択報告）と DuckDuckGo検索（キー不要。ブログ・団体サイトの「〇〇助成で開催しました」
@@ -190,8 +201,9 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 募集開始を検知（発掘→追跡への昇格）。判定履歴（名前一覧）はAI読み取りのプロンプトにも
 渡され、似た系統の判断材料になります（`docs/2026-07-16-human-judgment-design.md`）。
 
-`expectedPeriod` は「例年の募集時期」（例:「例年6〜7月頃（昨年実績: 2025/6/1〜7/9）」）で、
-`募集前`（＝🟡募集予定）のときにレポートへ表示されます。
+`expectedPeriod` は「例年の募集時期」（例:「例年6〜7月頃（前回: 2025/6/1〜7/9）」）で、
+`募集前`（＝🟡募集予定）のときにレポートへ表示されます。「前回:」は 2026-09 までは
+「昨年実績:」と書いていたため、DBの古い行には旧表記が残ります（レポートの解析は両方に対応）。
 
 値が制限された型（自由文字列ではなく、以下のリテラルを使うこと）：
 

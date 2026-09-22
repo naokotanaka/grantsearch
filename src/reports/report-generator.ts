@@ -113,7 +113,8 @@ function addMonthRange(months: Set<number>, start: number, end: number): void {
 function parseRecruitMonths(text: string): Set<number> {
   const months = new Set<number>();
   if (!text) return months;
-  const head = text.split(/[（(]昨年実績/)[0];
+  // 「前回:」（新）と「昨年実績:」（DBに残る旧表記）の両方に対応する
+  const head = text.split(/[（(](?:前回|昨年実績)/)[0];
 
   // 範囲（X月〜Y月）
   for (const m of head.matchAll(

@@ -10,7 +10,11 @@ import { AkaihaneAichiScraper } from "./akaihane-aichi-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { WatchSiteScraper } from "./watch-site-scraper";
 import { getKnownGrants } from "./known-grants";
-import { checkKnownGrants, checkGrantsOpening } from "./known-grants-checker";
+import { checkGrantsOpening } from "./known-grants-checker";
+import {
+  checkOpenings,
+  createOpeningJudge,
+} from "../enrich/ai-opening-checker";
 import { Grant, EXCLUDE_KEYWORDS } from "../models/grant";
 import {
   getDatabase,
@@ -54,15 +58,12 @@ export async function searchAllSources(): Promise<Grant[]> {
   // 途中で素の値を upsert すると、この引き継ぎ元が消えてしまうため厳禁。
   const stored = new Map(getAllGrants(db).map((g) => [g.id, g]));
 
-  // 1. 定番リストの読み込み＋公式ページとの突き合わせ（募集検知で自動昇格）
-  console.log("📋 定番助成金リストを確認中（各公式ページをチェック）...");
-  const knownGrants = await checkKnownGrants();
+  // 1. 定番リストの読み込み（募集開始の検知は、まとめた後に全プログラム一括で行う）
+  console.log("📋 定番助成金リストを読み込み中...");
+  const knownGrants = getKnownGrants();
   allGrants.push(...knownGrants);
   logSearch(db, "known", knownGrants.length);
-  const openCount = knownGrants.filter((g) => g.status === "募集中").length;
-  console.log(
-    `  → ${knownGrants.length}件の定番助成金を登録（うち募集検知 ${openCount}件）`,
-  );
+  console.log(`  → ${knownGrants.length}件の定番助成金を登録`);
 
   // 2. 各Webスクレイパーの実行（人間が登録した巡回サイトがあれば加える）
   const scrapers = getAllScrapers();
@@ -205,16 +206,37 @@ export async function searchAllSources(): Promise<Grant[]> {
     }
   }
 
-  // 「関係あり」の発掘品は定番リストと同じロジックで公式ページをチェックし、
-  // 募集開始を検知したら「募集中」へ昇格させる
-  const relevantOnes = withoutDismissed.filter(
-    (g) => g.humanJudgment === "関係あり" && g.status !== "募集中",
+  // 募集前（募集予定）の全プログラムと、👍で募集中でない行の公式ページを読み、
+  // 新しい回の募集を検知したら「募集中」へ昇格させる。
+  // AIが使えれば ai-opening-checker（公式ページ＋1段上のページ＋Web検索を
+  // Claude が判定）、使えなければ従来の正規表現検知（定番・👍のみ）
+  const openingJudge = createOpeningJudge();
+  const toCheck = withoutDismissed.filter(
+    (g) =>
+      g.status === "募集前" ||
+      (g.humanJudgment === "関係あり" && g.status !== "募集中"),
   );
-  if (relevantOnes.length > 0) {
-    console.log(
-      `\n👍 「関係あり」判定の ${relevantOnes.length}件の公式ページをチェック中...`,
-    );
-    const checked = await checkGrantsOpening(relevantOnes);
+  if (toCheck.length > 0) {
+    let checked: Grant[];
+    if (openingJudge) {
+      console.log(
+        `\n🔔 募集前 ${toCheck.length}件の公式ページをAIで確認中（新しい回の募集が出ていないか）...`,
+      );
+      const outcome = await checkOpenings(toCheck, { judge: openingJudge });
+      checked = outcome.grants;
+      console.log(
+        `  → 募集検知 ${outcome.stats.promoted}件（ページ取得 ${outcome.stats.fetches}回・Web検索 ${outcome.stats.searches}回）`,
+      );
+      logSearch(db, "opening-check", outcome.stats.promoted);
+    } else {
+      const targets = toCheck.filter(
+        (g) => g.source === "known" || g.humanJudgment === "関係あり",
+      );
+      console.log(
+        `\n👍 定番・「関係あり」の ${targets.length}件の公式ページをチェック中（正規表現）...`,
+      );
+      checked = await checkGrantsOpening(targets);
+    }
     for (const c of checked) {
       const idx = withoutDismissed.findIndex((g) => g.id === c.id);
       if (idx >= 0) withoutDismissed[idx] = c;
