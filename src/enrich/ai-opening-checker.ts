@@ -21,9 +21,11 @@ import { lastDeadlineDate } from "../scrapers/dedupe";
 const MODEL = process.env.CLAUDE_MATCH_MODEL ?? "claude-sonnet-5";
 
 /** 1回の実行で読むページ数の上限（コスト・時間の暴走防止） */
-export const MAX_FETCHES = 80;
+export const MAX_FETCHES = 150;
 /** 1回の実行で行う Web 検索の上限（DuckDuckGo への負荷・ブロック回避） */
-export const MAX_SEARCHES = 30;
+export const MAX_SEARCHES = 40;
+/** 例年の募集月が今からこの月数より先の行は、Web検索までは行わない（公式ページだけ読む） */
+const SEARCH_WITHIN_MONTHS = 3;
 /** 1プログラムあたり Web 検索結果から読むページ数 */
 const RESULTS_PER_SEARCH = 3;
 
@@ -186,6 +188,40 @@ function validDeadline(deadline: string, now: Date): Date | null {
   return date >= now && date <= horizon ? date : null;
 }
 
+/** AIの締切が「過去12ヶ月以内」（今年の回はもう終わった）なら true */
+function recentlyClosed(deadline: string, now: Date): boolean {
+  const date = lastDeadlineDate(toHalfWidthDigits(deadline));
+  if (!date) return false;
+  const floor = new Date(now);
+  floor.setMonth(floor.getMonth() - 12);
+  return date < now && date >= floor;
+}
+
+/**
+ * 例年の募集月（expectedPeriod の「例年9月〜10月頃」の最初の月）が今から何ヶ月先か
+ * （0〜11）。読めなければ null。今月または直近の行から順に確認するために使う。
+ */
+export function monthsUntilExpected(grant: Grant, now: Date): number | null {
+  const m = grant.expectedPeriod.match(/例年\s*(\d{1,2})\s*月/);
+  if (!m) return null;
+  const month = parseInt(m[1]);
+  if (month < 1 || month > 12) return null;
+  return (month - 1 - now.getMonth() + 12) % 12;
+}
+
+/** expectedPeriod の「（前回: …）」を今年の回の期間で置き換える */
+function withLatestRound(expectedPeriod: string, period: string): string {
+  if (/[（(](?:前回|昨年実績)/.test(expectedPeriod)) {
+    return expectedPeriod.replace(
+      /[（(](?:前回|昨年実績)[^）)]*[）)]/,
+      `（前回: ${period}）`,
+    );
+  }
+  return expectedPeriod
+    ? `${expectedPeriod}（前回: ${period}）`
+    : `前回: ${period}`;
+}
+
 /** 同時に処理するプログラム数（ページ取得とAI判定の待ち時間を重ねる） */
 const CONCURRENCY = 3;
 
@@ -224,6 +260,7 @@ export async function checkOpenings(
     push(parentUrl(grant.manualUrl || grant.url));
 
     let promoted: Grant | null = null;
+    let closedThisYear: Grant | null = null;
     const tryPage = async (pageUrl: string): Promise<boolean> => {
       if (stats.fetches >= MAX_FETCHES) return false;
       stats.fetches++;
@@ -241,6 +278,19 @@ export async function checkOpenings(
       if (verdict.announced !== "yes") return false;
       const deadline = validDeadline(verdict.deadline, now);
       if (!deadline) {
+        if (recentlyClosed(verdict.deadline, now)) {
+          // 今年の回はもう終わっている → 「前回」の期間を今年のものに更新し、
+          // これ以上（Web検索まで）探さない
+          const period = toHalfWidthDigits(verdict.period || verdict.deadline);
+          closedThisYear = {
+            ...grant,
+            expectedPeriod: withLatestRound(grant.expectedPeriod, period),
+          };
+          console.log(
+            `  ・${grant.name.slice(0, 30)}: 今年の回は終了（${period}）。前回の期間を更新`,
+          );
+          return true;
+        }
         console.log(
           `  ・${grant.name.slice(0, 30)}: 告知ありと判定したが締切が不正（${verdict.deadline || "空"}）のため据え置き`,
         );
@@ -266,7 +316,16 @@ export async function checkOpenings(
     }
 
     // 公式ページで見つからなければ Web 検索で候補ページを探す
-    if (!promoted && stats.searches < MAX_SEARCHES) {
+    // （今年の回が終わったと分かった行と、例年の募集月がまだ先の行は探さない）
+    const months = monthsUntilExpected(grant, now);
+    const searchWorthwhile =
+      months === null || months <= SEARCH_WITHIN_MONTHS || months >= 11;
+    if (
+      !promoted &&
+      !closedThisYear &&
+      searchWorthwhile &&
+      stats.searches < MAX_SEARCHES
+    ) {
       stats.searches++;
       try {
         const found = await search(`${searchTerm(grant.name)} 募集`);
@@ -283,14 +342,19 @@ export async function checkOpenings(
     }
 
     if (promoted) stats.promoted++;
-    return promoted ?? grant;
+    return promoted ?? closedThisYear ?? grant;
   };
 
-  // 先頭から順に取り出して、同時に CONCURRENCY 件ずつ処理する
+  // 例年の募集月が近い行から順に確認する（上限に達したとき、遠い行が後回しになる）。
+  // 結果は入力と同じ並び順で返す
+  const order = grants
+    .map((g, index) => ({ index, months: monthsUntilExpected(g, now) ?? 6 }))
+    .sort((a, b) => a.months - b.months)
+    .map((o) => o.index);
   let next = 0;
   const worker = async () => {
-    while (next < grants.length) {
-      const index = next++;
+    while (next < order.length) {
+      const index = order[next++];
       result[index] = await processOne(grants[index]);
     }
   };

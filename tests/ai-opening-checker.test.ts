@@ -176,6 +176,66 @@ describe("checkOpenings", () => {
     ]);
   });
 
+  it("今年の回がもう終わっていたら、前回の期間を今年のものに更新し、Web検索はしない", async () => {
+    let searched = 0;
+    const { grants, stats } = await checkOpenings([base()], {
+      judge: async () => yes("2026年6月30日", "2026年5月1日～2026年6月30日"),
+      fetchText: async () => "本文",
+      search: async () => {
+        searched++;
+        return [];
+      },
+      now: NOW,
+    });
+    expect(grants[0].status).toBe("募集前");
+    expect(grants[0].expectedPeriod).toBe(
+      "例年9月〜10月頃（前回: 2026年5月1日～2026年6月30日）",
+    );
+    expect(searched).toBe(0);
+    expect(stats.promoted).toBe(0);
+  });
+
+  it("例年の募集月がまだ先の行は、公式ページは読むが Web 検索はしない", async () => {
+    let searched = 0;
+    const far = grant({ ...base(), expectedPeriod: "例年2月〜3月頃" }); // 今は9月
+    const { grants } = await checkOpenings([far], {
+      judge: async () => no,
+      fetchText: async () => "本文",
+      search: async () => {
+        searched++;
+        return [];
+      },
+      now: NOW,
+    });
+    expect(grants[0].status).toBe("募集前");
+    expect(searched).toBe(0);
+  });
+
+  it("例年の募集月が近い行から順に確認する", async () => {
+    const visited: string[] = [];
+    const items = [
+      grant({ ...base(), id: "feb", expectedPeriod: "例年2月頃" }),
+      grant({ ...base(), id: "oct", expectedPeriod: "例年10月頃" }),
+      grant({ ...base(), id: "none", expectedPeriod: "" }),
+      grant({ ...base(), id: "sep", expectedPeriod: "例年9月〜10月頃" }),
+    ];
+    await checkOpenings(items, {
+      judge: async (g) => {
+        visited.push(g.id);
+        return no;
+      },
+      fetchText: async () => "本文",
+      search: async () => [],
+      now: NOW,
+    });
+    // 今は9月なので近い順は sep(0) → oct(1) → feb(5) → 月が無い行(6扱い)。
+    // 1行につき複数ページを読むので、最初に着手した順（初出）で見る。
+    // 3件並列なので先頭3件の順は前後するが、月が無い行は最後になる
+    const firstSeen = Array.from(new Set(visited));
+    expect(firstSeen.slice(0, 3).sort()).toEqual(["feb", "oct", "sep"]);
+    expect(firstSeen[3]).toBe("none");
+  });
+
   it("手動URLで見つかったときは行のURLを変えない", async () => {
     const g = grant({
       ...base(),
