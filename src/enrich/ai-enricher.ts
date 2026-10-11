@@ -57,6 +57,8 @@ interface ExtractionResult {
   honorarium: Eligibility;
   rent: Eligibility;
   summary: string;
+  /** 応募に全省庁統一資格（競争参加資格）が必要か（国の委託・公募） */
+  requiresUnifiedQualification: boolean;
 }
 
 const ELIGIBILITY_ENUM = ["可", "不可", "要確認", "不明"];
@@ -77,6 +79,7 @@ const EXTRACTION_SCHEMA = {
     "honorarium",
     "rent",
     "summary",
+    "requiresUnifiedQualification",
   ],
   properties: {
     applicable: {
@@ -132,6 +135,11 @@ const EXTRACTION_SCHEMA = {
       description:
         "何への助成かの一言（30字以内。例:「事業運営資金」「学習支援活動への助成」）。金額・締切・対象団体はここに書かない（別の欄がある）",
     },
+    requiresUnifiedQualification: {
+      type: "boolean",
+      description:
+        "応募に全省庁統一資格（競争参加資格）が必要と書かれていれば true。書かれていなければ false",
+    },
   },
 } as const;
 
@@ -165,6 +173,10 @@ ${NPO_PROFILE}
   - 障害・病気のある子ども（小児がん・難病・医療的ケア児・障がい児等）とその家族への
     支援に限定された助成 →「対象外」（対象分野の一つとして含むだけなら対象外にしない）
   - 活動分野が明らかに無関係（環境保全のみ、芸術のみ等）→「対象外」
+  - 国の委託事業・補助事業の公募（企画競争・補助事業者の公募）も対象にする。依頼元は
+    全省庁統一資格を取る予定なので、資格が必要なことは対象外の理由にしない
+    （requiresUnifiedQualification を true にする）。ただし、調査研究・分析だけが目的の
+    委託、情報システム・物品・工事の調達は「対象外」。
   - 判断材料が不足している場合 →「要確認」（安易に対象外にしない）
   - **「募集が終了している」「締切を過ぎている」は対象外の理由にしない**。毎年恒例の
     助成は翌年度また応募できるため、締切切れでも掲載を続ける（応募可否は
@@ -557,6 +569,7 @@ function applyExtraction(
 
   // 対象団体＋要約を「対象事業」欄に表示（応募可否の判断材料が一目で分かるように）
   const targetInfo = [
+    ex.requiresUnifiedQualification ? "【要：全省庁統一資格】" : "",
     ex.summary && ex.summary !== "不明" ? clamp(ex.summary, 30) : "",
     ex.targetOrganizations && ex.targetOrganizations !== "不明"
       ? `【対象】${clamp(ex.targetOrganizations, 40)}`

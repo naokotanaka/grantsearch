@@ -10,6 +10,13 @@ import { AkaihaneAichiScraper } from "./akaihane-aichi-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { WatchSiteScraper } from "./watch-site-scraper";
 import { TraceCandidateScraper } from "./trace-candidate-scraper";
+import {
+  GOV_CANDIDATE_DAYS,
+  GovKouboScraper,
+  collectGovKoubo,
+  createGovScreen,
+} from "./gov-koubo-scraper";
+import axios from "axios";
 import { CANDIDATE_DAYS, TRACE_LABEL } from "../enrich/supporter-trace";
 import { getKnownGrants } from "./known-grants";
 import { checkGrantsOpening } from "./known-grants-checker";
@@ -26,6 +33,9 @@ import {
   getAllGrants,
   getWatchSites,
   getTraceCandidates,
+  getSeenGovUrls,
+  getRelevantGovItems,
+  saveGovItems,
   hideGrantsNotIn,
   updateMemo,
   updateManualUrl,
@@ -35,6 +45,17 @@ import { enrichGrants } from "../enrich/ai-enricher";
 import { createAiJudge, matchPrograms } from "../enrich/ai-matcher";
 import { lastDeadlineDate, normalizeOrgName } from "./dedupe";
 import { isOtherMunicipality } from "./scope-rules";
+
+/** 国の公募の一覧ページを読むHTTPクライアント（他のスクレイパーと同じ User-Agent） */
+const govHttp = axios.create({
+  timeout: 30000,
+  headers: {
+    "User-Agent": "GrantSearch/1.0 (NPO Grant Research Tool)",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,en;q=0.5",
+  },
+});
+const httpGet = govHttp.get.bind(govHttp);
 
 /** 全スクレイパーの一覧 */
 function getAllScrapers(): BaseScraper[] {
@@ -79,6 +100,44 @@ export async function searchAllSources(): Promise<Grant[]> {
     allGrants.push(...traceGrants);
     logSearch(db, "trace", traceGrants.length);
     console.log(`🧭 ${TRACE_LABEL}で見つかった助成金 ${traceGrants.length}件を候補に加えます`);
+  }
+
+  // 国の公募：一覧ページの新しいリンクをAIで振り分けて記録し、対象と判定したもの
+  // （見つけてから120日間）を候補に加える。振り分けにAIが要るため、APIキーが無ければ読まない
+  const govScreen = createGovScreen();
+  if (govScreen) {
+    console.log("\n🏛 国の公募の一覧ページを確認中...");
+    const outcome = await collectGovKoubo(
+      { seenUrls: getSeenGovUrls(db) },
+      {
+        fetchHtml: async (url) =>
+          String((await httpGet(url, { responseType: "text" })).data),
+        screen: govScreen,
+      },
+    );
+    saveGovItems(db, runAt, outcome.items);
+    for (const s of outcome.siteResults) {
+      const error = s.error ?? (s.links === 0 ? "抽出0件（要確認）" : undefined);
+      logSearch(db, `gov:${s.key}`, s.links, error);
+      if (error) console.warn(`  ⚠ ${s.label}: ${error}`);
+    }
+    if (outcome.screenError) {
+      console.warn(`  ⚠ 国の公募のAI振り分けに失敗: ${outcome.screenError}（次の検索で判定し直します）`);
+      logSearch(db, "gov:screen", 0, outcome.screenError);
+    }
+    console.log(
+      `  → 新しいリンク ${outcome.items.length}件を判定し、対象 ${outcome.items.filter((i) => i.relevant).length}件`,
+    );
+  }
+  const govRecords = getRelevantGovItems(
+    db,
+    new Date(Date.now() - GOV_CANDIDATE_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+  );
+  if (govRecords.length > 0) {
+    const govGrants = await new GovKouboScraper(govRecords).search();
+    allGrants.push(...govGrants);
+    logSearch(db, "gov", govGrants.length);
+    console.log(`  → 国の公募 ${govGrants.length}件を候補に加えます`);
   }
 
   // 2. 各Webスクレイパーの実行（人間が登録した巡回サイトがあれば加える）

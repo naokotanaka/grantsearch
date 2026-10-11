@@ -6,6 +6,7 @@ import type {
   TraceFunderRecord,
   TraceResult,
 } from "../enrich/supporter-trace";
+import type { GovItem, GovRecord } from "../scrapers/gov-koubo-scraper";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "grants.db");
@@ -94,6 +95,18 @@ export function initializeSchema(db: Database.Database): void {
       grant_name TEXT NOT NULL DEFAULT '',
       grant_url TEXT NOT NULL DEFAULT '',
       benefit_type TEXT NOT NULL DEFAULT '不明'
+    );
+
+    -- 国の公募（scrapers/gov-koubo-scraper.ts）。見たリンクと、AIの振り分けの結果
+    CREATE TABLE IF NOT EXISTS gov_items (
+      url TEXT PRIMARY KEY,
+      site_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      organization TEXT NOT NULL DEFAULT '',
+      first_seen TEXT NOT NULL,
+      relevant INTEGER NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS trace_runs (
@@ -498,6 +511,47 @@ export function getLatestTraceRun(db: Database.Database): TraceRun | null {
     found: row.found,
     error: row.error ?? null,
   };
+}
+
+/** 国の公募：今回新しく見たリンクと振り分けの結果を記録する（既にあれば変えない） */
+export function saveGovItems(
+  db: Database.Database,
+  seenAt: string,
+  items: GovItem[],
+): void {
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO gov_items (url, site_key, title, name, organization, first_seen, relevant, reason)
+     VALUES (@url, @siteKey, @title, @name, @organization, @seenAt, @relevantInt, @reason)`,
+  );
+  db.transaction(() => {
+    for (const item of items)
+      stmt.run({ ...item, seenAt, relevantInt: item.relevant ? 1 : 0 });
+  })();
+}
+
+/** 国の公募：これまでに見たリンク（AIに渡し直さない） */
+export function getSeenGovUrls(db: Database.Database): Set<string> {
+  const rows = db.prepare("SELECT url FROM gov_items").all() as { url: string }[];
+  return new Set(rows.map((r) => r.url));
+}
+
+/** 国の公募：月曜の検索に取り込む（指定日時以降に見つけ、対象と判定したもの） */
+export function getRelevantGovItems(
+  db: Database.Database,
+  sinceIso: string,
+): GovRecord[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM gov_items WHERE relevant = 1 AND first_seen >= ? ORDER BY first_seen, url",
+    )
+    .all(sinceIso) as any[];
+  return rows.map((r) => ({
+    url: r.url,
+    siteKey: r.site_key,
+    title: r.title,
+    name: r.name,
+    organization: r.organization,
+  }));
 }
 
 /** 直近の検索実行でまとめた組（レポート下部の確認用） */

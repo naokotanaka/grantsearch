@@ -40,9 +40,12 @@ interface Sections {
 function categorize(grants: Grant[], dismissed: Grant[] = []): Sections {
   const open = grants.filter((g) => g.status === "募集中");
   const upcoming = grants.filter((g) => g.status === "募集前");
-  // 発見系ソース（News発掘＋巡回サイト＋支援元サーチ）は⚪ではなく🔎新着・発見に載せる
+  // 発見系ソース（News＋巡回サイト＋支援元サーチ＋国の公募）は⚪ではなく🔎新着・発見に載せる
   const isDiscovery = (g: Grant) =>
-    g.source === "news" || g.source === "watch" || g.source === "trace";
+    g.source === "news" ||
+    g.source === "watch" ||
+    g.source === "trace" ||
+    g.source === "gov";
   const discovered = grants.filter(
     (g) => isDiscovery(g) && g.status !== "募集中" && g.status !== "募集前",
   );
