@@ -76,7 +76,7 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
    - `Grant.id` で重複除去後、**`matchPrograms()`（`src/enrich/ai-matcher.ts`）が
      同じ助成金（プログラム）を指す行を1行にまとめます**。判定は3層：①既存行の
      別名一覧（`aliases`）との一致 → ②文字列規則・助成元の類似で候補をひとかたまりに
-     → ③かたまりごとに Claude（`CLAUDE_MATCH_MODEL`、既定 `claude-sonnet-5`）が
+     → ③かたまりごとに Claude（`CLAUDE_MATCH_MODEL`、既定 `claude-opus-5-5`）が
      「どれとどれが同じプログラムか」を判定。判定結果は別名一覧に残し、次回以降は
      AIを呼びません。APIキー未設定時は文字列規則だけ（`dedupeAcrossSources()`、
      `src/scrapers/dedupe.ts`）でまとめます。
@@ -87,7 +87,7 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
    - `EXCLUDE_KEYWORDS`（被災・災害・復興など、当団体の分野外）に該当するものを除外します。
    - **募集開始チェック（`src/enrich/ai-opening-checker.ts` の `checkOpenings()`）**：
      募集前の全プログラム（＋👍で募集中でない行）について、手動URL・前回のURL・その
-     1段上のページを読み、Claude（`CLAUDE_MATCH_MODEL`）に「新しい回の募集告知が
+     1段上のページを読み、Claude（`CLAUDE_OPENING_MODEL`、既定 `claude-sonnet-5-5`）に「新しい回の募集告知が
      あるか」を判定させます。見つからなければ Web 検索（DuckDuckGo、
      `src/scrapers/web-search.ts`）で候補ページを探して同じ判定をします。AIの締切が
      「未来かつ1年以内」のときだけ「募集中」へ昇格します。上限は1回の実行で
@@ -236,9 +236,13 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 
 - **APIキー**：環境変数 `ANTHROPIC_API_KEY`（本番はサーバーの `.env` に設定）。
   **未設定でも壊れず**、ルールベースの簡易抽出（正規表現）にフォールバックします。
-- **モデル**：既定 `claude-haiku-4-5`（低コスト）。環境変数 `CLAUDE_MODEL` で上書き可。
-  同一判定（`ai-matcher.ts`）は呼び出し回数が少なく判断の質を優先するため、別の
-  環境変数 `CLAUDE_MATCH_MODEL`（既定 `claude-sonnet-5`）で指定します。
+- **モデル**：役割ごとに環境変数で指定します（未設定なら既定値）。
+  - 公式ページの読み取り（`ai-enricher.ts`）：`CLAUDE_MODEL`、既定 `claude-sonnet-5-5`
+  - 同一判定（`ai-matcher.ts`）：`CLAUDE_MATCH_MODEL`、既定 `claude-opus-5-5`。
+    呼び出し回数が少なく、誤ってまとめると人間の入力が別の助成金に付くため、判断の質を優先
+  - 募集開始チェック（`ai-opening-checker.ts`）：`CLAUDE_OPENING_MODEL`、既定 `claude-sonnet-5-5`
+  - Opus 5.5 は思考を止められず、思考のトークンも `max_tokens` に含まれます。
+    `max_tokens` を小さくすると JSON が途中で切れて判定が失敗するので、下げないこと。
 - **安全弁**：1回の実行で読むページは最大150件（`MAX_PAGES`）、本文は8,000字まで。
   ページ取得失敗・AI呼び出し失敗時はその助成金を**そのまま掲載**します（消さない）。
 - **上書きしない**：スクレイパーが既に良い値を持つ項目（`要確認`/`不明` 以外）は

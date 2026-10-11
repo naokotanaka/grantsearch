@@ -30,8 +30,8 @@ const NPO_PROFILE = `
   長久手市は名古屋市ではないため、名古屋市限定の助成・補助にも応募できない）
 `.trim();
 
-/** モデル（環境変数で上書き可。既定は軽量・低コストの Haiku） */
-const MODEL = process.env.CLAUDE_MODEL ?? "claude-haiku-4-5";
+/** モデル（環境変数で上書き可。既定は Sonnet） */
+const MODEL = process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5";
 
 /** 1回の実行で読み取る公式ページの上限（コスト暴走の防止） */
 const MAX_PAGES = 150;
@@ -686,7 +686,8 @@ export async function extractGrantNamesFromTitles(
   const numbered = titles.map((t, i) => `${i}: ${t}`).join("\n");
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 2048,
+    // モデルが思考にトークンを使う場合があるため、途中で切れない十分な上限にする
+    max_tokens: 8192,
     system:
       "あなたは日本のNPOの助成金調査担当です。他団体の採択報告・活動報告の記事タイトル（「／」の後に本文抜粋が続く場合あり）から、助成金・基金の名称と助成元を抽出します。記事を書いた団体名（助成を受けた側）を助成金名や助成元と混同しないこと。",
     output_config: {

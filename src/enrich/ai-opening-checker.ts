@@ -17,8 +17,8 @@ import { lastDeadlineDate } from "../scrapers/dedupe";
  * APIキー未設定時は呼ばれない（呼び出し側が従来の検知に戻す）。
  */
 
-/** 判定に使うモデル（同一判定と同じ。判断の質を優先） */
-const MODEL = process.env.CLAUDE_MATCH_MODEL ?? "claude-sonnet-5";
+/** 判定に使うモデル（ページ取得の回数だけ呼ぶため、同一判定より呼び出しが多い。Sonnet） */
+const MODEL = process.env.CLAUDE_OPENING_MODEL ?? "claude-sonnet-5-5";
 
 /** 1回の実行で読むページ数の上限（コスト・時間の暴走防止） */
 export const MAX_FETCHES = 150;

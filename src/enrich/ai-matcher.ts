@@ -27,8 +27,8 @@ import {
  * APIキー未設定・AI失敗時は、文字列規則だけでまとめる（従来どおり）。
  */
 
-/** 同一判定に使うモデル（週に十数回の呼び出し。判断の質を優先して Sonnet） */
-const MATCH_MODEL = process.env.CLAUDE_MATCH_MODEL ?? "claude-sonnet-5";
+/** 同一判定に使うモデル（週に十数回の呼び出し。誤ってまとめると人間の入力が別の助成金に付くため、判断の質を優先して Opus） */
+const MATCH_MODEL = process.env.CLAUDE_MATCH_MODEL ?? "claude-opus-5-5";
 
 /** 1回の実行でAIに聞くかたまりの上限（コスト暴走の防止） */
 const MAX_AI_GROUPS = 40;
@@ -121,7 +121,8 @@ export function createAiJudge(): Judge | null {
     }));
     const response = await client.messages.create({
       model: MATCH_MODEL,
-      max_tokens: 4096,
+      // Opus は思考を止められず、思考のトークンもこの上限に含まれる。途中で切れない十分な上限にする
+      max_tokens: 16000,
       system: SYSTEM_PROMPT,
       output_config: {
         format: { type: "json_schema", schema: GROUPING_SCHEMA },
