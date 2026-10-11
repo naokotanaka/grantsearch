@@ -2,15 +2,13 @@ import * as cheerio from "cheerio";
 import { BaseScraper } from "./base-scraper";
 import { Grant, Region } from "../models/grant";
 import { extractGrantNamesFromTitles } from "../enrich/ai-enricher";
-import { searchWeb } from "./web-search";
 
 /**
  * Web横断検索による助成金発見スクレイパー
  *
- * 2つの検索を使い、固定の情報源には載らないマイナーな助成金を発掘する：
- * - Google News RSS: ニュース記事・プレスリリースの募集告知＋採択報告
- * - DuckDuckGo（キー不要）: ブログ・団体サイトの「〇〇助成でイベントを
- *   開催しました」という活動報告（ニュースに載らない助成金の発掘源）
+ * Google News RSS で、ニュース記事・プレスリリースの募集告知と採択報告から
+ * 助成金を発掘する。助成金名から公式サイトを探すときは DuckDuckGo を使う。
+ * ブログ・団体サイトの活動報告からの発掘は、支援元サーチ（enrich/supporter-trace.ts）が担う。
  *
  * 発見した記事は「候補」であり、内容の確認はリンク先で行う前提
  * （レポートでは🔎セクションに掲載する）。
@@ -44,19 +42,6 @@ export class NewsDiscoveryScraper extends BaseScraper {
     '"採択" 助成金 子ども食堂',
     '"助成が決定" NPO 子ども',
     '"助成金を活用" 子ども食堂',
-  ];
-
-  /**
-   * 活動報告のWeb検索キーワード（DuckDuckGo・キー不要）。
-   * ニュースに載らないブログ・団体サイトの「〇〇助成でイベントを開催しました」
-   * という報告から、まだ追跡していない助成金を発掘する。
-   */
-  private static readonly WEB_REPORT_QUERIES = [
-    '"助成を受けて" 子ども食堂',
-    '"助成金を活用して" 子ども 開催',
-    '"の助成により" 子ども イベント',
-    '"様から助成" 子ども食堂',
-    '"助成をいただき" 子ども 開催',
   ];
 
   /** 採択報告由来の掲載上限（通常の発見枠とは別） */
@@ -215,21 +200,9 @@ export class NewsDiscoveryScraper extends BaseScraper {
       }
     }
 
-    // ブログ・団体サイトの活動報告をWeb検索で集める（日付は取れないため鮮度判定なし。
-    // 古い報告でも「毎年恒例の助成」の発見につながるので候補として扱う）
-    for (const query of NewsDiscoveryScraper.WEB_REPORT_QUERIES) {
-      try {
-        const results = await this.searchWebReports(query);
-        for (const r of results) {
-          // タイトルだけでは助成金名が入らないことが多いので、本文抜粋を添えてAIに渡す
-          const text = r.snippet ? `${r.title} ／ ${r.snippet}` : r.title;
-          if (!NewsDiscoveryScraper.REPORT_PATTERN.test(text)) continue;
-          articles.set(text, r.url);
-        }
-      } catch {
-        // クエリ単位の失敗はスキップ
-      }
-    }
+    // ブログ・団体サイトの活動報告は、支援元サーチ（enrich/supporter-trace.ts）が
+    // 本文を読んで助成元を取り出す。ここでは扱わない（2026-10 までの引用符付き
+    // DuckDuckGo 検索は毎回0件だったため削除）
 
     if (articles.size === 0) return [];
 
@@ -267,17 +240,6 @@ export class NewsDiscoveryScraper extends BaseScraper {
       grants.push(grant);
     }
     return grants;
-  }
-
-  /**
-   * DuckDuckGo（HTML版・キー不要）でWeb全体を検索し、結果一覧を返す。
-   * ニュースに載らないブログ・団体サイトの活動報告を拾うため、
-   * 除外はSNS・検索エンジンのみ（ブログサービスは発掘源として採用する）。
-   */
-  private async searchWebReports(
-    query: string,
-  ): Promise<{ title: string; url: string; snippet: string }[]> {
-    return searchWeb(query, "News発見");
   }
 
   /** RSS（XML）を解析して助成金告知らしき記事を抽出 */

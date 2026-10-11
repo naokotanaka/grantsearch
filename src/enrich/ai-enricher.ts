@@ -30,8 +30,9 @@ const NPO_PROFILE = `
   長久手市は名古屋市ではないため、名古屋市限定の助成・補助にも応募できない）
 `.trim();
 
-/** モデル（環境変数で上書き可。既定は Sonnet） */
-const MODEL = process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5";
+/** モデル（環境変数で上書き可。既定は Sonnet）。支援元サーチのページ読み取りも同じモデルを使う */
+export const READ_MODEL = process.env.CLAUDE_MODEL ?? "claude-sonnet-5-5";
+const MODEL = READ_MODEL;
 
 /** 1回の実行で読み取る公式ページの上限（コスト暴走の防止） */
 const MAX_PAGES = 150;

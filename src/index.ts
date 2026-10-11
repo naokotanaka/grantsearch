@@ -2,6 +2,7 @@ import { searchAllSources } from "./scrapers";
 import { generateAllReports } from "./reports/report-generator";
 import { startScheduler } from "./scheduler";
 import { startServer } from "./server";
+import { runSupporterTrace, TRACE_LABEL } from "./enrich/supporter-trace";
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? "search";
@@ -20,6 +21,16 @@ async function main(): Promise<void> {
         generateAllReports();
       } catch (error) {
         console.error("検索中にエラーが発生しました:", error);
+        process.exit(1);
+      }
+      break;
+
+    case "discover":
+      // 支援元サーチを1回だけ実行する（見つかった助成金は次の検索で取り込まれる）
+      try {
+        await runSupporterTrace();
+      } catch (error) {
+        console.error(`${TRACE_LABEL}でエラーが発生しました:`, error);
         process.exit(1);
       }
       break;
@@ -64,9 +75,11 @@ function printHelp(): void {
   npm run server              Webサーバー起動（スマホからアクセス可能）
   npm run schedule            定期実行モード（毎週月曜9:00）
   npm start -- schedule "0 9 * * 1"   カスタムcron式で定期実行
+  npm start -- discover       ${TRACE_LABEL}を1回実行（結果は次の検索で取り込まれる）
 
 コマンド:
   search    - Web上の助成金情報を収集し、レポートを生成します
+  discover  - 似た活動の団体の支援元から、公式の募集ページを探します（毎週木曜9:00にも自動実行）
   report    - 前回収集済みのデータからレポートを再生成します
   server    - Webサーバーを起動します（週次スケジューラも同時に動きます）
   schedule  - 定期実行モードで起動します（デフォルト: 毎週月曜9:00）

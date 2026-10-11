@@ -41,6 +41,7 @@ gate で保護）。常駐プロセスが週次自動検索（毎週月曜 9:00 
 | `npm run server`                    | Web ダッシュボード＋週次スケジューラを起動（`PORT`・`HOST` で変更可）       |
 | `npm run schedule`                  | プロセス内 cron スケジューラを起動（デフォルト：毎週月曜 9:00）             |
 | `npm start -- schedule "0 9 * * 1"` | カスタム cron 式でスケジューラ起動                                          |
+| `npm start -- discover`             | 支援元サーチを1回実行（見つかった助成金は次の検索で取り込まれる）           |
 
 `start` / `search` / `report` / `server` / `schedule` スクリプトは `dist/` 内の
 コンパイル済み JS を実行するため、事前に `npm run build` が必要です。開発時は
@@ -98,13 +99,22 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
      （下記「AIエンリッチメント」参照）。
    - **最後に、確定した最終リストをDBへ再upsertし、リストに入らなかった行を
      `hidden=1` にします。DBが正本**で、レポートは常にDB（`hidden=0`）から生成されます。
+   - **支援元サーチ（`src/enrich/supporter-trace.ts`、毎週木曜 9:00）**：月曜の検索とは
+     別に動きます。👍の助成金の採択団体一覧と、ブログサービス等の検索で見つけた活動報告・
+     お礼のページを読み、AIが助成元・寄付元の名前を取り出します。まだ追っていない助成元の
+     公式の募集ページを検索で探し、見つかったものだけを `trace_funders` に候補として保存します。
+     月曜の検索は、見つけてから60日以内の候補を定番と同じく最初に取り込みます
+     （`TraceCandidateScraper`、`source='trace'`。レポートでは🔎新着・発見）。読んだページは
+     90日、調べた助成元は180日、調べ直しません。上限は1回あたりページ30件・助成元20件・
+     検索40回。月曜の検索と同じ実行中フラグ（`search-runner`）を使います。
+     設計は `docs/2026-10-11-supporter-trace-design.md`。手動実行は `npm start -- discover`。
 2. **`generateAllReports()`**（`src/reports/report-generator.ts`）は
    DB（`getVisibleGrants`）から読んで Markdown・HTML
    （`grants-report-YYYY-MM-DD.{md,html}`）・コンソール要約を
    **状態別の4部構成**で出力します：
    - 🟢 **今募集中**（締切昇順）／🟡 **募集予定・例年この時期**（次に来る月順、
      12ヶ月の帯で募集月・助成期間・今月を表示）／🔎 **新着・発見**（News発掘＋
-     採択報告からの発掘、新しい順）／⚪ **要確認**。
+     採択報告からの発掘＋巡回サイト＋支援元サーチ、新しい順）／⚪ **要確認**。
    - `募集終了` と `hidden=1` は表示しません。DBから読むため
      `npm run report` は再スクレイピングなしで動作し、メモ保存後の再生成も同一経路です。
 3. **`generate-pages.ts`** は単独スクリプトです（`index.ts` からは import されず、
@@ -137,8 +147,9 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   発掘（news-discovery）と募集開始チェックで共用。
 - `src/scrapers/news-discovery-scraper.ts` — Web横断検索によるマイナー助成金の発掘
   （レポートの🔎セクションに掲載）。Google News RSS（募集告知60日以内・上限20件＋
-  採択報告）と DuckDuckGo検索（キー不要。ブログ・団体サイトの「〇〇助成で開催しました」
-  という活動報告から助成金名をAI抽出）の2系統。URLの解決（`resolveOfficialSite`）では、
+  採択報告）。ブログ・団体サイトの活動報告からの発掘は支援元サーチ（`enrich/supporter-trace.ts`）
+  が担う（2026-10 まであった引用符付きの DuckDuckGo 検索は毎回0件だったため削除。
+  **DuckDuckGo は引用符で囲んだ語句の検索に0件を返す**）。URLの解決（`resolveOfficialSite`）では、
   検索結果がプレスリリース配信サイト（PR TIMES 等、`PRESS_RELEASE_SITES`）だったら
   記事内の公式リンクを辿り、無ければ配信サイト除外で再検索する（読み手を公式ページへ
   飛ばすため）。フォームサービス（tayori 等）は `NON_OFFICIAL` で除外。
@@ -160,7 +171,8 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
 - `src/reports/report-generator.ts` — Markdown / HTML / コンソールのレポート描画。
 - `src/search-runner.ts` — 検索実行の一元管理（実行中フラグ＋最終結果）。手動
   （ダッシュボード）と自動（週次）の同時実行を防ぎます。検索を起動する処理は
-  必ずここを通してください。
+  必ずここを通してください。支援元サーチ（`startTrace`）も同じフラグを使い、
+  実行中の仕事の種類を `job` に持ちます（ダッシュボードの表示の切り替えに使う）。
 - `src/server.ts` — 依存ライブラリ不要の `http` ダッシュボード。`GET /`（操作パネル）、
   `POST /api/search`（検索をバックグラウンド開始、即応答）、`GET /api/status`
   （実行状態。フロントが5秒間隔でポーリング）、`GET /api/report`（最新 HTML レポート配信）、
@@ -175,6 +187,7 @@ CLI のエントリポイント（`src/index.ts`）は `process.argv[2]`
   絶対パス `/api/...` に戻すと本番で壊れます）。既定バインドは `127.0.0.1`
   （gate 素通り防止。`HOST` で変更可）。
 - `src/scheduler.ts` — `node-cron` によるプロセス内スケジューラ（`Asia/Tokyo` 固定）。
+  毎週月曜 9:00 に検索、毎週木曜 9:00 に支援元サーチ。
   SIGINT/SIGTERM のクリーンアップ付き。`server` コマンドでも同時起動されます。
 
 ## `Grant` モデル

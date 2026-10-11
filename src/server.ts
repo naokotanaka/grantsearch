@@ -14,7 +14,10 @@ import {
   getWatchSites,
   addWatchSite,
   deleteWatchSite,
+  getLatestTraceRun,
+  TraceRun,
 } from "./models/database";
+import { TRACE_LABEL } from "./enrich/supporter-trace";
 import { Grant, HumanJudgment, Region } from "./models/grant";
 import { generateAllReports } from "./reports/report-generator";
 import { enrichSingleGrant } from "./enrich/ai-enricher";
@@ -76,9 +79,16 @@ export function startServer(): void {
         );
       }
     } else if (url.pathname === "/api/status" && req.method === "GET") {
-      // 検索の実行状態を返す（フロントがポーリングする）
+      // 検索の実行状態と、前回の支援元サーチの記録を返す（フロントがポーリングする）
+      const db = getDatabase();
+      let trace: TraceRun | null = null;
+      try {
+        trace = getLatestTraceRun(db);
+      } finally {
+        db.close();
+      }
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify(getSearchState()));
+      res.end(JSON.stringify({ ...getSearchState(), trace }));
     } else if (url.pathname === "/api/memo" && req.method === "POST") {
       // メモの保存（人間の入力。再検索でも消えない）
       try {
@@ -543,6 +553,7 @@ function getDashboardHtml(): string {
         検索には30〜45分かかります（AIが約140ページを読むため）。開始したら画面を閉じても大丈夫です
         （毎週月曜9:00にも自動実行されます）。
       </p>
+      <p class="info" id="traceInfo" style="margin-top:8px;"></p>
     </div>
 
     <div class="card">
@@ -611,11 +622,31 @@ function getDashboardHtml(): string {
     const status = document.getElementById('searchStatus');
     let pollTimer = null;
 
-    function showRunning() {
+    const TRACE_LABEL = ${JSON.stringify(TRACE_LABEL)};
+
+    function showRunning(job) {
       btn.disabled = true;
-      btn.textContent = '検索中...';
       status.className = 'status show running';
+      if (job === TRACE_LABEL) {
+        btn.textContent = TRACE_LABEL + 'の実行中...';
+        status.innerHTML = '<span class="spinner"></span> ' + TRACE_LABEL +
+          'を実行しています。終わるまで検索は始められません（画面を閉じても続きます）...';
+        return;
+      }
+      btn.textContent = '検索中...';
       status.innerHTML = '<span class="spinner"></span> 助成金情報を収集しています。30〜45分かかります（画面を閉じても続きます）...';
+    }
+
+    function showTrace(trace) {
+      const el = document.getElementById('traceInfo');
+      if (!trace) {
+        el.textContent = TRACE_LABEL + '（毎週木曜9:00）: まだ実行していません';
+        return;
+      }
+      const time = new Date(trace.runAt).toLocaleString('ja-JP');
+      el.textContent = '前回の' + TRACE_LABEL + '（' + time + '）: 新しく見つかった助成金 ' +
+        trace.found + '件（読んだページ ' + trace.pages + '件・調べた助成元 ' + trace.checked + '件）' +
+        (trace.error ? '／注意: ' + trace.error : '') + '。見つかった助成金は次の検索でレポートに載ります';
     }
 
     function showIdle(last) {
@@ -640,8 +671,9 @@ function getDashboardHtml(): string {
       try {
         const res = await fetch('api/status');
         const state = await res.json();
+        showTrace(state.trace);
         if (state.running) {
-          showRunning();
+          showRunning(state.job);
           if (!pollTimer) pollTimer = setInterval(poll, 5000);
         } else {
           stopPolling();

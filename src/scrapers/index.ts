@@ -9,6 +9,8 @@ import { AkaihaneScraper } from "./akaihane-scraper";
 import { AkaihaneAichiScraper } from "./akaihane-aichi-scraper";
 import { NewsDiscoveryScraper } from "./news-discovery-scraper";
 import { WatchSiteScraper } from "./watch-site-scraper";
+import { TraceCandidateScraper } from "./trace-candidate-scraper";
+import { CANDIDATE_DAYS, TRACE_LABEL } from "../enrich/supporter-trace";
 import { getKnownGrants } from "./known-grants";
 import { checkGrantsOpening } from "./known-grants-checker";
 import {
@@ -23,6 +25,7 @@ import {
   logMerges,
   getAllGrants,
   getWatchSites,
+  getTraceCandidates,
   hideGrantsNotIn,
   updateMemo,
   updateManualUrl,
@@ -65,6 +68,18 @@ export async function searchAllSources(): Promise<Grant[]> {
   allGrants.push(...knownGrants);
   logSearch(db, "known", knownGrants.length);
   console.log(`  → ${knownGrants.length}件の定番助成金を登録`);
+
+  // 支援元サーチ（木曜）で見つかった助成金を候補に加える（見つけてから60日間）
+  const traceRecords = getTraceCandidates(
+    db,
+    new Date(Date.now() - CANDIDATE_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+  );
+  if (traceRecords.length > 0) {
+    const traceGrants = await new TraceCandidateScraper(traceRecords).search();
+    allGrants.push(...traceGrants);
+    logSearch(db, "trace", traceGrants.length);
+    console.log(`🧭 ${TRACE_LABEL}で見つかった助成金 ${traceGrants.length}件を候補に加えます`);
+  }
 
   // 2. 各Webスクレイパーの実行（人間が登録した巡回サイトがあれば加える）
   const scrapers = getAllScrapers();

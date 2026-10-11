@@ -172,7 +172,7 @@ export abstract class BaseScraper {
     /facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|line\.me|linkedin\.com|hatena|google\.[a-z.]+|news\.google|tayori\.com|forms\.gle|jotform\.com|formzu\.net|ssgform\.com/;
 
   /** まとめサイト等、検索フォールバックで公式サイトとして採用しないドメイン */
-  protected static readonly AGGREGATOR_SITES =
+  static readonly AGGREGATOR_SITES =
     /shimisen-kyoto|canpan\.info|musubie\.org|wikipedia|note\.com|ameblo\.jp|hatenablog/;
 
   /**
@@ -180,7 +180,7 @@ export abstract class BaseScraper {
    * 読み手は公式ページへ飛びたいので、リンク先としては記事内の公式リンクを
    * 辿った先を優先する（記事自体は最後のフォールバックとして使う）。
    */
-  protected static readonly PRESS_RELEASE_SITES =
+  static readonly PRESS_RELEASE_SITES =
     /prtimes\.(jp|co\.jp)|atpress\.(jp|ne\.jp)|value-press\.com|dreamnews\.jp|digitalpr\.jp|kyodonewsprwire\.jp|pressrelease-zero\.jp/;
 
   /**

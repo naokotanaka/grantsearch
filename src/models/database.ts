@@ -2,6 +2,10 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { Grant, GrantAlias, HumanJudgment } from "./grant";
+import type {
+  TraceFunderRecord,
+  TraceResult,
+} from "../enrich/supporter-trace";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "grants.db");
@@ -20,7 +24,7 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
-function initializeSchema(db: Database.Database): void {
+export function initializeSchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS grants (
       id TEXT PRIMARY KEY,
@@ -70,6 +74,37 @@ function initializeSchema(db: Database.Database): void {
       url TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL
     );
+
+    -- 支援元サーチ（enrich/supporter-trace.ts）
+    CREATE TABLE IF NOT EXISTS trace_pages (
+      url TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      read_at TEXT NOT NULL,
+      funders INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS trace_funders (
+      key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      program_name TEXT NOT NULL DEFAULT '',
+      clue TEXT NOT NULL DEFAULT '',
+      page_url TEXT NOT NULL DEFAULT '',
+      checked_at TEXT NOT NULL,
+      result TEXT NOT NULL,
+      grant_name TEXT NOT NULL DEFAULT '',
+      grant_url TEXT NOT NULL DEFAULT '',
+      benefit_type TEXT NOT NULL DEFAULT '不明'
+    );
+
+    CREATE TABLE IF NOT EXISTS trace_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_at TEXT NOT NULL,
+      pages INTEGER NOT NULL DEFAULT 0,
+      mentions INTEGER NOT NULL DEFAULT 0,
+      checked INTEGER NOT NULL DEFAULT 0,
+      found INTEGER NOT NULL DEFAULT 0,
+      error TEXT
+    );
   `);
 
   // 既存DB向けの列追加マイグレーション（列が既にあれば無視）
@@ -81,6 +116,7 @@ function initializeSchema(db: Database.Database): void {
     "ALTER TABLE grants ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE grants ADD COLUMN human_judgment TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE grants ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE trace_funders ADD COLUMN page_url TEXT NOT NULL DEFAULT ''",
   ];
   for (const sql of migrations) {
     try {
@@ -363,6 +399,105 @@ export function logMerges(
     }
   });
   insertMany(merges);
+}
+
+/** 支援元サーチの結果を記録する（読んだページ・調べた助成元・実行の記録） */
+export function saveTraceResult(
+  db: Database.Database,
+  runAt: string,
+  result: TraceResult,
+  error?: string,
+): void {
+  const pageStmt = db.prepare(
+    `INSERT INTO trace_pages (url, kind, read_at, funders) VALUES (?, ?, ?, ?)
+     ON CONFLICT(url) DO UPDATE SET kind = excluded.kind, read_at = excluded.read_at, funders = excluded.funders`,
+  );
+  const funderStmt = db.prepare(
+    `INSERT INTO trace_funders (key, name, program_name, clue, page_url, checked_at, result, grant_name, grant_url, benefit_type)
+     VALUES (@key, @name, @programName, @clue, @pageUrl, @checkedAt, @result, @grantName, @grantUrl, @benefitType)
+     ON CONFLICT(key) DO UPDATE SET name = excluded.name, program_name = excluded.program_name,
+       clue = excluded.clue, page_url = excluded.page_url, checked_at = excluded.checked_at, result = excluded.result,
+       grant_name = excluded.grant_name, grant_url = excluded.grant_url, benefit_type = excluded.benefit_type`,
+  );
+  const runStmt = db.prepare(
+    "INSERT INTO trace_runs (run_at, pages, mentions, checked, found, error) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  db.transaction(() => {
+    for (const p of result.pages) pageStmt.run(p.url, p.kind, runAt, p.funders);
+    for (const f of result.funders) funderStmt.run({ ...f, checkedAt: runAt });
+    const s = result.stats;
+    runStmt.run(runAt, s.pages, s.mentions, s.checked, s.found, error ?? null);
+  })();
+}
+
+/** 指定日時以降に読んだページのURL */
+export function getRecentTracePages(
+  db: Database.Database,
+  sinceIso: string,
+): Set<string> {
+  const rows = db
+    .prepare("SELECT url FROM trace_pages WHERE read_at >= ?")
+    .all(sinceIso) as { url: string }[];
+  return new Set(rows.map((r) => r.url));
+}
+
+/** 指定日時以降に調べた助成元のキー */
+export function getRecentTraceFunders(
+  db: Database.Database,
+  sinceIso: string,
+): Set<string> {
+  const rows = db
+    .prepare("SELECT key FROM trace_funders WHERE checked_at >= ?")
+    .all(sinceIso) as { key: string }[];
+  return new Set(rows.map((r) => r.key));
+}
+
+/** 月曜の検索に取り込む候補（指定日時以降に見つかった助成金） */
+export function getTraceCandidates(
+  db: Database.Database,
+  sinceIso: string,
+): TraceFunderRecord[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM trace_funders WHERE result = 'found' AND checked_at >= ? ORDER BY checked_at, key",
+    )
+    .all(sinceIso) as any[];
+  return rows.map((r) => ({
+    key: r.key,
+    name: r.name,
+    programName: r.program_name,
+    clue: r.clue,
+    pageUrl: r.page_url ?? "",
+    result: "found",
+    grantName: r.grant_name,
+    grantUrl: r.grant_url,
+    benefitType: r.benefit_type,
+  }));
+}
+
+export interface TraceRun {
+  runAt: string;
+  pages: number;
+  mentions: number;
+  checked: number;
+  found: number;
+  error: string | null;
+}
+
+/** 直近の支援元サーチの実行記録（無ければ null） */
+export function getLatestTraceRun(db: Database.Database): TraceRun | null {
+  const row = db
+    .prepare("SELECT * FROM trace_runs ORDER BY run_at DESC, id DESC LIMIT 1")
+    .get() as any;
+  if (!row) return null;
+  return {
+    runAt: row.run_at,
+    pages: row.pages,
+    mentions: row.mentions,
+    checked: row.checked,
+    found: row.found,
+    error: row.error ?? null,
+  };
 }
 
 /** 直近の検索実行でまとめた組（レポート下部の確認用） */
