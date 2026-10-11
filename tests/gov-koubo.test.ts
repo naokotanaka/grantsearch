@@ -9,10 +9,15 @@ import {
   extractGovLinks,
   collectGovKoubo,
   GovKouboScraper,
+  govItemsToClose,
+  currentReiwaFiscalYear,
 } from "../src/scrapers/gov-koubo-scraper";
+import { Grant } from "../src/models/grant";
+import { grant } from "./helpers";
 import {
   initializeSchema,
   saveGovItems,
+  closeGovItems,
   getSeenGovUrls,
   getRelevantGovItems,
 } from "../src/models/database";
@@ -154,6 +159,51 @@ describe("collectGovKoubo", () => {
     );
     expect(result.items).toHaveLength(0);
     expect(result.screenError).toBe("AI失敗");
+  });
+});
+
+describe("締切済み・対象外の国の公募を、以後取り込まない", () => {
+  const base = (id: string, partial: Partial<Grant> = {}): Grant => ({
+    ...grant({ id, name: id, source: "gov", url: `https://g.example/${id}` }),
+    ...partial,
+  });
+
+  it("読み取りで除かれたもの・締切が過ぎたものを選ぶ（👍・締切前・締切不明は選ばない）", () => {
+    const before = [
+      base("excluded"),
+      base("past"),
+      base("future"),
+      base("unknown"),
+      base("thumbs", { humanJudgment: "関係あり" }),
+      { ...base("other"), source: "canpan" },
+    ];
+    const after = [
+      base("past", { applicationDeadline: "令和8年5月18日（月）17時必着" }),
+      base("future", { applicationDeadline: "令和8年11月30日" }),
+      base("unknown", { applicationDeadline: "要確認" }),
+      base("thumbs", { humanJudgment: "関係あり", applicationDeadline: "令和7年3月3日" }),
+    ];
+    expect(govItemsToClose(before, after, NOW)).toEqual([
+      { url: "https://g.example/excluded", reason: "対象外（公式ページの読み取り）" },
+      { url: "https://g.example/past", reason: "締切済み" },
+    ]);
+  });
+
+  it("今年度（4月始まり）を令和で返す", () => {
+    expect(currentReiwaFiscalYear(new Date(2026, 9, 11))).toBe(8);
+    expect(currentReiwaFiscalYear(new Date(2027, 2, 31))).toBe(8);
+    expect(currentReiwaFiscalYear(new Date(2027, 3, 1))).toBe(9);
+  });
+
+  it("DBで対象外にすると、次の週から取り込まない", () => {
+    const db = new Database(":memory:");
+    initializeSchema(db);
+    saveGovItems(db, "2026-10-12T00:00:00.000Z", [
+      { url: "https://g.example/past", siteKey: "cfa", title: "t", name: "", organization: "", relevant: true, reason: "" },
+    ]);
+    closeGovItems(db, [{ url: "https://g.example/past", reason: "締切済み" }]);
+    expect(getRelevantGovItems(db, "2026-10-01T00:00:00.000Z")).toHaveLength(0);
+    expect(getSeenGovUrls(db).has("https://g.example/past")).toBe(true);
   });
 });
 

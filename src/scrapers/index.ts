@@ -15,6 +15,7 @@ import {
   GovKouboScraper,
   collectGovKoubo,
   createGovScreen,
+  govItemsToClose,
 } from "./gov-koubo-scraper";
 import axios from "axios";
 import { CANDIDATE_DAYS, TRACE_LABEL } from "../enrich/supporter-trace";
@@ -36,6 +37,7 @@ import {
   getSeenGovUrls,
   getRelevantGovItems,
   saveGovItems,
+  closeGovItems,
   hideGrantsNotIn,
   updateMemo,
   updateManualUrl,
@@ -354,10 +356,22 @@ export async function searchAllSources(): Promise<Grant[]> {
 
   // 各助成金の公式ページを読み、詳細情報（対象団体・助成額・経費可否）を充填。
   // 応募対象外と判断されたものはここで除外される（保護IDは除外されない）。
-  const result = await enrichGrants(
+  const enriched = await enrichGrants(
     withoutDismissed,
     judgmentExamples,
     protectedIds,
+  );
+
+  // 国の公募は、毎年同じ公募が出るとは限らない。締切が過ぎたもの・対象外と判定された
+  // ものは掲載せず、次の週から取り込まない（👍のものは除く）
+  const govClosed = govItemsToClose(withoutDismissed, enriched, nowDate);
+  if (govClosed.length > 0) {
+    closeGovItems(db, govClosed);
+    console.log(`  → 国の公募 ${govClosed.length}件を、締切済み・対象外として以後取り込みません`);
+  }
+  const closedUrls = new Set(govClosed.map((c) => c.url));
+  const result = enriched.filter(
+    (g) => !(g.source === "gov" && closedUrls.has(g.url)),
   );
   const statusCounts = {
     募集中: result.filter((g) => g.status === "募集中").length,

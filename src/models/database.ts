@@ -529,6 +529,19 @@ export function saveGovItems(
   })();
 }
 
+/** 国の公募：締切済み・対象外になったものを、以後取り込まないようにする */
+export function closeGovItems(
+  db: Database.Database,
+  items: { url: string; reason: string }[],
+): void {
+  const stmt = db.prepare(
+    "UPDATE gov_items SET relevant = 0, reason = ? WHERE url = ?",
+  );
+  db.transaction(() => {
+    for (const i of items) stmt.run(i.reason, i.url);
+  })();
+}
+
 /** 国の公募：これまでに見たリンク（AIに渡し直さない） */
 export function getSeenGovUrls(db: Database.Database): Set<string> {
   const rows = db.prepare("SELECT url FROM gov_items").all() as { url: string }[];

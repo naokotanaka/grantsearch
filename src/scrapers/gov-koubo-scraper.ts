@@ -269,15 +269,23 @@ const SCREEN_PROMPT = `
 - 自治体・企業・大学だけが応募できるもの、地域が限られていて愛知県が入らないもの
   （例: 北海道・東北地域だけの事業）。
 - 会議・お知らせ・結果の公表など、公募ではないもの。
+- 題名や締切から、今年度より前の年度の公募とわかるもの（一覧には過去の年度の公募も残っている）。
 
 渡した全部の番号について、1件ずつ答えてください。
 `.trim();
+
+/** 今年度（4月始まり）を令和で返す。例: 2026年10月 → 8 */
+export function currentReiwaFiscalYear(now: Date): number {
+  const fiscalYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return fiscalYear - 2018;
+}
 
 /** APIキーがあれば Claude による振り分けを返す。無ければ null */
 export function createGovScreen(): GovScreen | null {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const client = new Anthropic();
   return async (links) => {
+    const fiscalYear = currentReiwaFiscalYear(new Date());
     const list = links
       .map(
         (l, i) =>
@@ -288,7 +296,7 @@ export function createGovScreen(): GovScreen | null {
       model: READ_MODEL,
       // モデルが思考にトークンを使う場合があるため、途中で切れない十分な上限にする
       max_tokens: 16000,
-      system: SCREEN_PROMPT,
+      system: `${SCREEN_PROMPT}\n\n今年度は令和${fiscalYear}年度。令和${fiscalYear - 1}年度以前の公募は false。`,
       output_config: { format: { type: "json_schema", schema: SCREEN_SCHEMA } },
       messages: [{ role: "user", content: `題名の一覧:\n${list}` }],
     });
@@ -300,6 +308,30 @@ export function createGovScreen(): GovScreen | null {
     }
     return (JSON.parse(textBlock.text) as { items: GovScreenResult[] }).items;
   };
+}
+
+/**
+ * 以後取り込まない国の公募を選ぶ：公式ページの読み取りで対象外と判定されたもの
+ * （読み取り後のリストに無いもの）と、締切が過ぎたもの。👍（関係あり）は選ばない。
+ */
+export function govItemsToClose(
+  before: Grant[],
+  after: Grant[],
+  now: Date,
+): { url: string; reason: string }[] {
+  const kept = new Map(after.map((g) => [g.id, g]));
+  const closed: { url: string; reason: string }[] = [];
+  for (const g of before) {
+    if (g.source !== "gov" || g.humanJudgment === "関係あり") continue;
+    const k = kept.get(g.id);
+    if (!k) {
+      closed.push({ url: g.url, reason: "対象外（公式ページの読み取り）" });
+      continue;
+    }
+    const deadline = lastDeadlineDate(k.applicationDeadline);
+    if (deadline && deadline < now) closed.push({ url: g.url, reason: "締切済み" });
+  }
+  return closed;
 }
 
 /** gov_items から取り出した、月曜の検索に取り込む公募 */
