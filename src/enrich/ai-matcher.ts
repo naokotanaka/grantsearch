@@ -32,8 +32,12 @@ const MATCH_MODEL = process.env.CLAUDE_MATCH_MODEL ?? "claude-opus-5-5";
 
 /** 1回の実行でAIに聞くかたまりの上限（コスト暴走の防止） */
 const MAX_AI_GROUPS = 40;
-/** 1つのかたまりの行数の上限（超えた分はAIに聞かず、まとめない） */
-const MAX_GROUP_SIZE = 25;
+/**
+ * 1つのかたまりの行数の上限（超えたかたまりはAIに聞かず、文字列規則でまとめる）。
+ * むすびえのように多くの企業基金の事務局を務める団体は、助成元の類似で
+ * 30行を超えるかたまりになる（2026-10 に35行で上限25を超え、照合されなかった）
+ */
+export const MAX_GROUP_SIZE = 60;
 
 /** AIが返す「同じプログラム」の組 */
 export interface ProgramGroup {
@@ -307,22 +311,21 @@ export async function matchPrograms(
     mergeGroup([program, g], storedIds, protectedIds, "別名一致", merges);
   }
 
+  /** 文字列規則だけでまとめる（AIが使えないとき・上限を超えたかたまり） */
+  const mergeByRules = (rows: Grant[]): Grant[] =>
+    dedupeAcrossSources(rows, protectedIds, storedIds, (kept, folded) =>
+      merges.push({
+        keptId: kept.id,
+        keptName: kept.name,
+        foldedName: folded.name,
+        foldedSource: folded.source,
+        reason: "名前の規則",
+      }),
+    );
+
   // 2. AI判定が使えなければ、文字列規則だけでまとめる（従来どおり）
   if (!judge) {
-    const result = dedupeAcrossSources(
-      Array.from(working.values()),
-      protectedIds,
-      storedIds,
-      (kept, folded) =>
-        merges.push({
-          keptId: kept.id,
-          keptName: kept.name,
-          foldedName: folded.name,
-          foldedSource: folded.source,
-          reason: "名前の規則",
-        }),
-    );
-    return { grants: result, merges };
+    return { grants: mergeByRules(Array.from(working.values())), merges };
   }
 
   // 3. かたまりごとにAIへ聞く
@@ -336,9 +339,9 @@ export async function matchPrograms(
   for (const cluster of targets) {
     if (asked >= MAX_AI_GROUPS || cluster.length > MAX_GROUP_SIZE) {
       console.warn(
-        `  ⚠ 照合をスキップ（上限超過）: ${cluster[0].organization}（${cluster.length}行）`,
+        `  ⚠ AI照合をスキップ（上限超過）・名前の規則でまとめる: ${cluster[0].organization}（${cluster.length}行）`,
       );
-      result.push(...cluster);
+      result.push(...mergeByRules(cluster));
       continue;
     }
     asked++;

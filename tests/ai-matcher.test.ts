@@ -4,6 +4,7 @@ import {
   clusterCandidates,
   isSimilarOrganization,
   Judge,
+  MAX_GROUP_SIZE,
   ProgramGroup,
 } from "../src/enrich/ai-matcher";
 import { Grant } from "../src/models/grant";
@@ -190,6 +191,36 @@ describe("matchPrograms", () => {
     ];
     const { grants } = await matchPrograms(rows, new Map(), new Set(), judge);
     expect(grants.map((g) => g.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("行数の上限を超えたかたまりは、AIに聞かずに文字列規則でまとめる", async () => {
+    const org = "全国こども食堂支援センター・むすびえ";
+    const others = Array.from({ length: MAX_GROUP_SIZE }, (_, i) =>
+      grant({ id: `m${i}`, name: `むすびえ 企業基金${i}号`, organization: org }),
+    );
+    const tsuruha = [
+      grant({ id: "t1", name: "ツルハグループ「こども食堂ゆたかさ基金」2026年度春期助成", organization: `ツルハホールディングス／${org}`, status: "募集中", applicationDeadline: "2026年10月30日 13:00〜2026年11月20日 17:00" }),
+      grant({ id: "t2", name: "ツルハグループ「こども食堂ゆたかさ基金」2027年度春期助成", organization: org, status: "募集中", applicationDeadline: "2026年10月30日（金）13:00 ～ 2026年11月20日（金）17:00" }),
+      grant({ id: "t3", name: "【助成金情報】ツルハグループ「こども食堂ゆたかさ基金」2027年度春期助成", organization: "ツルハグループ", status: "募集中", applicationDeadline: "2026年11月20日(金)17:00" }),
+    ];
+    let aiCalled = false;
+    const judge: Judge = async (rows) => {
+      aiCalled = true;
+      return rows.map((r) => ({ programName: r.name, memberIds: [r.id], reason: "" }));
+    };
+
+    const { grants, merges } = await matchPrograms(
+      [...others, ...tsuruha],
+      new Map(),
+      new Set(),
+      judge,
+    );
+
+    expect(aiCalled).toBe(false);
+    expect(grants).toHaveLength(MAX_GROUP_SIZE + 1);
+    expect(grants.filter((g) => g.name.includes("ゆたかさ基金"))).toHaveLength(1);
+    expect(merges).toHaveLength(2);
+    expect(merges.every((m) => m.reason === "名前の規則")).toBe(true);
   });
 
   it("AI無し（judge=null）では文字列規則だけでまとめる", async () => {
